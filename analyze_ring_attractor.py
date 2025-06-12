@@ -18,6 +18,9 @@ class ObservationSettings:
     scale_factor: float = 1.0  # scaling factor for Poisson input
     observation_matrix: Optional[np.ndarray] = None
     snr_target: Optional[float] = None  # target SNR for automatic scaling
+    target_rate_per_bin: float = 0.1  # target firing rate for Poisson
+    p_coherence: float = 0.5  # probability of coherence for loading matrix
+    p_sparsity: float = 0.1  # probability of sparsity for loading matrix
 
 def plot_vector_field(X, Y, U, V, title="Vector Field"):
     """Plot the vector field with streamlines."""
@@ -72,69 +75,105 @@ def calculate_metrics(trajectories):
         'std_angular_velocity': std_angular_velocity
     }
 
-def generate_observations(trajectories: np.ndarray, settings: ObservationSettings) -> Tuple[np.ndarray, np.float64]:
-    """
-    Generate noisy observations from trajectories using specified observation model.
+def compute_firing_rate(x: np.ndarray, C: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Compute the firing rate of a log-linear Poisson neuron model"""
+    return np.exp(x @ C + b)
+
+def update_bias_to_match_target_rate(current_rate: np.ndarray, current_bias: np.ndarray, target_rate: float) -> np.ndarray:
+    """Update bias to match target firing rate"""
+    return current_bias + np.log(target_rate / current_rate)
+
+def compute_snr(latent_traj: np.ndarray, C: np.ndarray, b: np.ndarray, target_rate: float) -> Tuple[float, np.ndarray]:
+    """Compute SNR using Fisher information matrix"""
+    # Compute firing rates
+    firing_rates = compute_firing_rate(latent_traj, C, b)
     
-    Args:
-        trajectories: Array of shape (n_trajectories, n_timesteps, n_states)
-        settings: ObservationSettings object containing model parameters
+    # Update bias to match target rate
+    b = update_bias_to_match_target_rate(np.mean(firing_rates, axis=0), b, target_rate)
+    firing_rates = compute_firing_rate(latent_traj, C, b)
     
-    Returns:
-        Tuple of (noisy_observations, actual_snr)
-    """
+    # Compute SNR using Fisher information
+    SNR = 0
+    for i, firing_rate in enumerate(firing_rates):
+        SNR += np.trace(np.linalg.inv(C @ np.diag(firing_rate) @ C.T))
+    SNR = SNR / firing_rates.shape[0]
+    SNR = 10 * np.log10(C.shape[0] / SNR)
+    
+    return SNR, b
+
+def generate_poisson_observations(trajectories: np.ndarray, settings: ObservationSettings) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    """Generate Poisson observations with target SNR"""
     n_trajectories, n_timesteps, n_states = trajectories.shape
     
-    # If no observation matrix provided, use identity matrix
+    # Reshape trajectories for processing
+    latent_traj = trajectories.reshape(-1, n_states)
+    
+    # Generate random loading matrix if not provided
     if settings.observation_matrix is None:
-        settings.observation_matrix = np.eye(n_states)
+        # Simple random matrix for now (we can add the more sophisticated generation later)
+        C = np.random.randn(n_states, n_states)
+        C = C / np.linalg.norm(C, axis=0)
+    else:
+        C = settings.observation_matrix
     
-    n_observations = settings.observation_matrix.shape[0]
-    noisy_observations = np.zeros((n_trajectories, n_timesteps, n_observations))
+    # Initialize bias
+    # TODO Investigate why subtracting changes the mean firing rate by so much
+    b = np.zeros((1, n_states)) - np.log(settings.target_rate_per_bin) - 5.0
     
-    # Generate observations for each trajectory and timestep
-    for i in range(n_trajectories):
-        for t in range(n_timesteps):
-            # Linear transformation
-            observation = settings.observation_matrix @ trajectories[i, t]
-            
-            if settings.model == ObservationModel.GAUSSIAN:
-                # Add Gaussian noise
+    # Compute initial firing rates and SNR
+    firing_rates = compute_firing_rate(latent_traj, C, b)
+    
+    if settings.snr_target is not None:
+        current_snr, b = compute_snr(latent_traj, C, b, settings.target_rate_per_bin)
+        if current_snr > 0:  # Only scale if SNR is positive
+            gain = np.sqrt(settings.snr_target / current_snr)
+            # Limit the maximum gain to prevent too large rates
+            max_gain = 10.0
+            gain = min(gain, max_gain)
+            C = C * gain
+            firing_rates = compute_firing_rate(latent_traj, C, b)
+            current_snr, b = compute_snr(latent_traj, C, b, settings.target_rate_per_bin)
+        else:
+            current_snr = 0.0
+    else:
+        current_snr = 0.0
+
+
+    # Generate Poisson observations
+    observations = np.random.poisson(firing_rates)
+    
+    # Reshape back to original dimensions
+    observations = observations.reshape(n_trajectories, n_timesteps, n_states)
+    firing_rates = firing_rates.reshape(n_trajectories, n_timesteps, n_states)
+    
+    return observations, C, b, firing_rates, current_snr
+
+def generate_observations(trajectories: np.ndarray, settings: ObservationSettings) -> Tuple[np.ndarray, float]:
+    """Generate noisy observations from trajectories using specified observation model."""
+    if settings.model == ObservationModel.GAUSSIAN:
+        n_trajectories, n_timesteps, n_states = trajectories.shape
+        
+        if settings.observation_matrix is None:
+            settings.observation_matrix = np.eye(n_states)
+        
+        n_observations = settings.observation_matrix.shape[0]
+        noisy_observations = np.zeros((n_trajectories, n_timesteps, n_observations))
+        
+        for i in range(n_trajectories):
+            for t in range(n_timesteps):
+                observation = settings.observation_matrix @ trajectories[i, t]
                 noise = np.random.normal(0, settings.noise_std, size=n_observations)
                 noisy_observations[i, t] = observation + noise
-                
-            elif settings.model == ObservationModel.POISSON:
-                # Log-linear Poisson model with scaled input
-                rate = settings.baseline_rate * np.exp(settings.scale_factor * observation)
-                noisy_observations[i, t] = np.random.poisson(rate)
-    
-    # Calculate actual SNR
-    if settings.model == ObservationModel.GAUSSIAN:
+        
         signal_var = np.var(trajectories)
         noise_var = np.var(noisy_observations - trajectories)
-        actual_snr = signal_var / noise_var if noise_var > 0 else float('inf')
-    else:  # Poisson
-        # Calculate rates from trajectories
-        rates = settings.baseline_rate * np.exp(settings.scale_factor * trajectories)
+        snr = signal_var / noise_var if noise_var > 0 else float('inf')
         
-        # For Poisson, we use a modified SNR calculation that considers:
-        # 1. The mean rate as signal
-        # 2. The Fano factor (variance/mean) as a measure of noise
-        # 3. The relative change in rate as a measure of signal strength
-        mean_rate = np.mean(rates)
-        rate_std = np.std(rates)
+        return noisy_observations, snr
         
-        # Calculate relative rate variation (signal)
-        relative_rate_variation = rate_std / mean_rate
-        
-        # Calculate Fano factor (noise)
-        # For Poisson, variance = mean, so Fano factor should be close to 1
-        fano_factor = np.var(noisy_observations) / np.mean(noisy_observations)
-        
-        # Modified SNR for Poisson: relative rate variation / deviation from ideal Fano factor
-        actual_snr = relative_rate_variation / abs(fano_factor - 1) if fano_factor != 1 else float('inf')
-    
-    return noisy_observations, actual_snr
+    elif settings.model == ObservationModel.POISSON:
+        observations, C, b, firing_rates, snr = generate_poisson_observations(trajectories, settings)
+        return observations, snr
 
 def plot_noisy_observations(trajectories, noisy_observations, settings: ObservationSettings, title="Noisy Observations"):
     """Plot original trajectories and their noisy observations."""
@@ -158,39 +197,36 @@ def plot_noisy_observations(trajectories, noisy_observations, settings: Observat
     plt.axis('equal')
     plt.legend()
 
-def plot_poisson_analysis(trajectories: np.ndarray, noisy_observations: np.ndarray, settings: ObservationSettings):
+def plot_poisson_analysis(trajectories: np.ndarray, noisy_observations: np.ndarray, firing_rates: np.ndarray, settings: ObservationSettings):
     """Plot analysis of Poisson rates and observations."""
-    # Calculate rates from trajectories with scaling
-    rates = settings.baseline_rate * np.exp(settings.scale_factor * trajectories)
-    
     # Create figure with subplots
     fig = plt.figure(figsize=(15, 10))
     
     # Plot 1: Scatter plot of true state vs rate
     plt.subplot(2, 2, 1)
-    plt.scatter(trajectories[:, :, 0].flatten(), rates[:, :, 0].flatten(), 
+    plt.scatter(trajectories[:, :, 0].flatten(), firing_rates[:, :, 0].flatten(), 
                 alpha=0.1, s=10, label='x-component')
-    plt.scatter(trajectories[:, :, 1].flatten(), rates[:, :, 1].flatten(), 
+    plt.scatter(trajectories[:, :, 1].flatten(), firing_rates[:, :, 1].flatten(), 
                 alpha=0.1, s=10, label='y-component')
     plt.xlabel('True State')
-    plt.ylabel('Poisson Rate')
-    plt.title(f'True State vs Poisson Rate (scale={settings.scale_factor:.2f})')
+    plt.ylabel('Firing Rate')
+    plt.title(f'True State vs Firing Rate (SNR={settings.snr_target:.1f})')
     plt.legend()
     
     # Plot 2: Histogram of rates
     plt.subplot(2, 2, 2)
-    plt.hist(rates.flatten(), bins=50, alpha=0.5, label='Rates')
+    plt.hist(firing_rates.flatten(), bins=50, alpha=0.5, label='Rates')
     plt.xlabel('Rate Value')
     plt.ylabel('Count')
-    plt.title('Distribution of Poisson Rates')
+    plt.title('Distribution of Firing Rates')
     
     # Plot 3: Scatter plot of rate vs observations
     plt.subplot(2, 2, 3)
-    plt.scatter(rates[:, :, 0].flatten(), noisy_observations[:, :, 0].flatten(), 
+    plt.scatter(firing_rates[:, :, 0].flatten(), noisy_observations[:, :, 0].flatten(), 
                 alpha=0.1, s=10, label='x-component')
-    plt.scatter(rates[:, :, 1].flatten(), noisy_observations[:, :, 1].flatten(), 
+    plt.scatter(firing_rates[:, :, 1].flatten(), noisy_observations[:, :, 1].flatten(), 
                 alpha=0.1, s=10, label='y-component')
-    plt.xlabel('Poisson Rate')
+    plt.xlabel('Firing Rate')
     plt.ylabel('Observations')
     plt.title('Rate vs Observations')
     plt.legend()
@@ -255,9 +291,10 @@ def main():
     
     poisson_settings = ObservationSettings(
         model=ObservationModel.POISSON,
-        baseline_rate=5.0,
-        scale_factor=0.2,  # Scale down the input to exponential
-        snr_target=50.0
+        target_rate_per_bin=0.1,
+        snr_target=10.0,  # Target SNR in dB
+        p_coherence=0.5,
+        p_sparsity=0.1
     )
     
     # Generate and plot Gaussian observations
@@ -272,8 +309,11 @@ def main():
     plt.savefig('poisson_observations.png')
     plt.close()
     
+    # Get firing rates for Poisson analysis
+    _, _, _, firing_rates, _ = generate_poisson_observations(trajectories, poisson_settings)
+    
     # Plot Poisson analysis
-    poisson_fig = plot_poisson_analysis(trajectories, poisson_observations, poisson_settings)
+    poisson_fig = plot_poisson_analysis(trajectories, poisson_observations, firing_rates, poisson_settings)
     poisson_fig.savefig('poisson_analysis.png')
     plt.close()
     
@@ -292,26 +332,11 @@ def main():
     print(f"Signal-to-Noise Ratio (SNR): {gaussian_snr:.3f}")
     
     print("\nPoisson Observation Metrics:")
-    poisson_errors = poisson_observations - trajectories
-    poisson_mean_error = np.mean(np.abs(poisson_errors))
-    poisson_std_error = np.std(poisson_errors)
-    print(f"Mean absolute error: {poisson_mean_error:.3f} ± {poisson_std_error:.3f}")
     print(f"Signal-to-Noise Ratio (SNR): {poisson_snr:.3f}")
-    
-    # Print Poisson rate statistics
-    rates = poisson_settings.baseline_rate * np.exp(poisson_settings.scale_factor * trajectories)
-    print("\nPoisson Rate Statistics:")
-    print(f"Mean rate: {np.mean(rates):.3f}")
-    print(f"Std rate: {np.std(rates):.3f}")
-    print(f"Min rate: {np.min(rates):.3f}")
-    print(f"Max rate: {np.max(rates):.3f}")
-    
-    # Print additional Poisson metrics
-    fano_factor = np.var(poisson_observations) / np.mean(poisson_observations)
-    relative_rate_variation = np.std(rates) / np.mean(rates)
-    print("\nAdditional Poisson Metrics:")
-    print(f"Fano factor: {fano_factor:.3f}")
-    print(f"Relative rate variation: {relative_rate_variation:.3f}")
+    print(f"Mean firing rate: {np.mean(firing_rates):.3f}")
+    print(f"Std firing rate: {np.std(firing_rates):.3f}")
+    print(f"Min firing rate: {np.min(firing_rates):.3f}")
+    print(f"Max firing rate: {np.max(firing_rates):.3f}")
 
 if __name__ == "__main__":
-    main() 
+    main()

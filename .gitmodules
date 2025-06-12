@@ -1,0 +1,6 @@
+[submodule "xfads"]
+	path = xfads
+	url = https://github.com/catniplab/xfads.git
+[submodule "symmetry-ode-discovery"]
+	path = symmetry-ode-discovery
+	url = https://github.com/Rose-STL-Lab/symmetry-ode-discovery.git
