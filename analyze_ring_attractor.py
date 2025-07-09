@@ -165,37 +165,64 @@ def generate_observations(trajectories: np.ndarray, settings: ObservationSetting
                 noise = np.random.normal(0, settings.noise_std, size=n_observations)
                 noisy_observations[i, t] = observation + noise
         
-        signal_var = np.var(trajectories)
-        noise_var = np.var(noisy_observations - trajectories)
-        snr = signal_var / noise_var if noise_var > 0 else float('inf')
+        # For SNR calculation, project observations back to latent space or use clean observations
+        clean_observations = np.zeros((n_trajectories, n_timesteps, n_observations))
+        for i in range(n_trajectories):
+            for t in range(n_timesteps):
+                clean_observations[i, t] = settings.observation_matrix @ trajectories[i, t]
+        
+        signal_var = np.var(clean_observations)
+        noise_var = np.var(noisy_observations - clean_observations)
+        snr = float(signal_var / noise_var) if noise_var > 0 else float('inf')
         
         return noisy_observations, snr
         
     elif settings.model == ObservationModel.POISSON:
         observations, C, b, firing_rates, snr = generate_poisson_observations(trajectories, settings)
-        return observations, snr
+        return observations, float(snr)
+    else:
+        return np.zeros((1, 1)), 0.0
 
 def plot_noisy_observations(trajectories, noisy_observations, settings: ObservationSettings, title="Noisy Observations"):
     """Plot original trajectories and their noisy observations."""
-    plt.figure(figsize=(10, 10))
+    plt.figure(figsize=(15, 5))
     
-    # Plot original trajectories
-    for traj in trajectories:
-        plt.plot(traj[:, 0], traj[:, 1], color='blue', alpha=0.1, label='Original' if traj is trajectories[0] else "")
-    
-    # Plot noisy observations
-    for obs in noisy_observations:
-        if settings.model == ObservationModel.GAUSSIAN:
-            plt.scatter(obs[:, 0], obs[:, 1], color='red', alpha=0.1, s=10, label='Noisy' if obs is noisy_observations[0] else "")
-        else:  # Poisson
-            plt.scatter(obs[:, 0], obs[:, 1], color='green', alpha=0.1, s=10, label='Poisson' if obs is noisy_observations[0] else "")
-    
-    plt.title(f"{title} ({settings.model.value})")
-    plt.xlabel('x')
-    plt.ylabel('y')
+    # Plot 1: Original trajectories in latent space
+    plt.subplot(1, 3, 1)
+    for i, traj in enumerate(trajectories[:10]):  # Show first 10 trajectories
+        plt.plot(traj[:, 0], traj[:, 1], color='blue', alpha=0.7, linewidth=1, 
+                label='Trajectories' if i == 0 else "")
+    plt.title('Original Latent Trajectories')
+    plt.xlabel('Latent Dimension 1')
+    plt.ylabel('Latent Dimension 2')
     plt.grid(True)
     plt.axis('equal')
     plt.legend()
+    
+    # Plot 2: Observation dimensionality and statistics
+    plt.subplot(1, 3, 2)
+    obs_means = np.mean(noisy_observations, axis=(0, 1))
+    obs_stds = np.std(noisy_observations, axis=(0, 1))
+    neuron_indices = np.arange(len(obs_means))
+    
+    plt.errorbar(neuron_indices, obs_means, yerr=obs_stds, alpha=0.7, capsize=2)
+    plt.title(f'Neural Observations\n({noisy_observations.shape[2]} neurons)')
+    plt.xlabel('Neuron Index')
+    plt.ylabel('Mean ± Std Activity')
+    plt.grid(True)
+    
+    # Plot 3: Time series for first few neurons
+    plt.subplot(1, 3, 3)
+    n_neurons_plot = min(5, noisy_observations.shape[2])
+    for i in range(n_neurons_plot):
+        plt.plot(noisy_observations[0, :, i], alpha=0.7, label=f'Neuron {i+1}')
+    plt.title('Neural Activity Over Time\n(First trial)')
+    plt.xlabel('Time Steps')
+    plt.ylabel('Neural Activity')
+    plt.legend()
+    plt.grid(True)
+    
+    plt.tight_layout()
 
 def plot_poisson_analysis(trajectories: np.ndarray, noisy_observations: np.ndarray, firing_rates: np.ndarray, settings: ObservationSettings):
     """Plot analysis of Poisson rates and observations."""
@@ -241,7 +268,7 @@ def plot_poisson_analysis(trajectories: np.ndarray, noisy_observations: np.ndarr
     plt.tight_layout()
     return fig
 
-def main():
+def main(return_data=False):
     # Set parameters
     perturbation_norm = 0.1
     random_seed = 313
@@ -250,7 +277,7 @@ def main():
     num_points_invman = 200
     maxT = 5
     tsteps = 100
-    number_of_target_trajectories = 100
+    number_of_target_trajectories = 500
     
     # Set random seed for reproducibility
     np.random.seed(random_seed)
@@ -283,10 +310,18 @@ def main():
     plt.close()
     
     # Generate observations with both models
+    n_neurons = 50  # Number of neurons to simulate
+    n_latents = 2   # Latent dimensionality
+    
+    # Create random observation matrix (neurons x latents)
+    np.random.seed(42)  # For reproducibility
+    observation_matrix = np.random.randn(n_neurons, n_latents) * 0.5
+    
     gaussian_settings = ObservationSettings(
         model=ObservationModel.GAUSSIAN,
         noise_std=0.1,
-        snr_target=50.0
+        snr_target=50.0,
+        observation_matrix=observation_matrix
     )
     
     poisson_settings = ObservationSettings(
@@ -325,10 +360,17 @@ def main():
     
     # Calculate observation noise metrics
     print("\nGaussian Observation Metrics:")
-    gaussian_errors = gaussian_observations - trajectories
+    # Compute clean observations for error calculation
+    clean_gaussian_obs = np.zeros_like(gaussian_observations)
+    for i in range(gaussian_observations.shape[0]):
+        for t in range(gaussian_observations.shape[1]):
+            clean_gaussian_obs[i, t] = observation_matrix @ trajectories[i, t]
+    
+    gaussian_errors = gaussian_observations - clean_gaussian_obs
     gaussian_mean_error = np.mean(np.abs(gaussian_errors))
     gaussian_std_error = np.std(gaussian_errors)
-    print(f"Mean absolute error: {gaussian_mean_error:.3f} ± {gaussian_std_error:.3f}")
+    print(f"Mean absolute observation error: {gaussian_mean_error:.3f} ± {gaussian_std_error:.3f}")
+    print(f"Observation dimensionality: {gaussian_observations.shape[2]}D")
     print(f"Signal-to-Noise Ratio (SNR): {gaussian_snr:.3f}")
     
     print("\nPoisson Observation Metrics:")
@@ -337,6 +379,22 @@ def main():
     print(f"Std firing rate: {np.std(firing_rates):.3f}")
     print(f"Min firing rate: {np.min(firing_rates):.3f}")
     print(f"Max firing rate: {np.max(firing_rates):.3f}")
+
+    if return_data:
+        return {
+            'trajectories': trajectories,
+            'gaussian_observations': gaussian_observations,
+            'gaussian_settings': gaussian_settings,
+            'poisson_observations': poisson_observations,
+            'poisson_settings': poisson_settings,
+            'inv_man': inv_man,
+            'vector_field': {
+                'X': X,
+                'Y': Y,
+                'U': U_pert,
+                'V': V_pert
+            }
+        }
 
 if __name__ == "__main__":
     main()
