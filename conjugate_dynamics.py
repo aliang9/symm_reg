@@ -205,8 +205,10 @@ class LieDerivative(nn.Module):
         )[0]
         eps = torch.finfo(df.dtype).eps
         ell2 = torch.norm(dg - df,p=2, dim=-1)
+        ell2 = torch.nn.functional.mse_loss(dg,df,reduction='sum')
         if normalize:
-            dg_norm = torch.norm(dg, p=2, dim=-1)
+            dg.square().sum(dim=-1)
+            dg_norm = dg.square().sum(dim=-1)
             return torch.sum(ell2/( dg_norm + eps))
         else:
             return torch.sum(ell2)
