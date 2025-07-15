@@ -218,7 +218,7 @@ class LieDerivative(nn.Module):
         g = self.Y(x)
         return f, g, x
 
-def f_generator(A) -> Callable[[Tensor], Tensor]:
+def dynamics_factory(A) -> Callable[[Tensor], Tensor]:
     def f(x: Tensor) -> Tensor:
         r = torch.sqrt(torch.sum((x @ A) * x, dim=-1, keepdim=True))
         return x * (1 - r)
@@ -233,7 +233,7 @@ if __name__ == "__main__":
         model = phi(dim, repetitions=1, hidden=32)
         A = torch.randn(2, 2)
         A = A @ A.T
-        f = f_generator(A)
+        f = dynamics_factory(A)
         conjugate_system = ConjugateSystem(f,model, t=20.0)
         visualize_conjugacy_with_invariant(conjugate_system, f, n_points=100, A=A)
 
@@ -242,25 +242,28 @@ if __name__ == "__main__":
         match vfield_kind:
             case "ring":
                 A = torch.eye(2).requires_grad_(True)
-                f = f_generator(A)
+                f = dynamics_factory(A)
             case "ellipse":
                 A = torch.randn(2, 2).requires_grad_(True)
                 A = A @ A.T  # Ensure A is positive definite
-                f = f_generator(A)
+                f = dynamics_factory(A)
             case "nonlinear":
                 A = torch.randn(2, 2).requires_grad_(True)
                 A = A @ A.T  # Ensure A is positive definite
                 model = phi(dim, repetitions=1, hidden=32)
-                f = ConjugateSystem(f_generator(A), model, t=20.0)
+                f = ConjugateSystem(dynamics_factory(A), model, t=20.0)
             case _:
                 raise ValueError(f"Unknown base {vfield_kind}")
 
-        def g(x: Tensor) -> Tensor:
+        # Element of the basis (generator) of the Lie algebra
+        # We're using SO(2), the group of rotations in 2D
+        # SO(2) has only one generator, a skew symmetric matrix
+        def v(x: Tensor) -> Tensor:
             return x @ torch.tensor([[0.0, -1.0], [1.0, 0.0]])
 
         x = sample_ellipse_perimeter_from_A(200, A)
 
-        lie = LieDerivative(f, g)
+        lie = LieDerivative(f, v)
         ell = lie.loss(x)
         print(f"Normalized Lie derivative loss: {ell.item():.3e} for {vfield_kind}-like dynamics\n")
         grad_A, = torch.autograd.grad(ell, A, create_graph=False)
