@@ -1,20 +1,18 @@
+from functools import partial
+from typing import Callable, TypeAlias, Union
+
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 import torchdiffeq
-import matplotlib.pyplot as plt
-import numpy as np
-from typing import TypeAlias
-from functools import partial
-from typing import Callable, Union
-import torch
 from torch import Tensor
-from torch import nn
 
 VectorField = Union[nn.Module, Callable[[Tensor], Tensor]]
 nn_activation: TypeAlias = torch.nn.modules.activation
 odeint = partial(torchdiffeq.odeint, options={"dtype":torch.float32})
 
-class phi(nn.Module):
+class Phi(nn.Module):
     def __init__(self, dim: int, hidden: int = 96, activation:nn_activation = nn.GELU, repetitions: int = 0):
         super().__init__()
         layers = [nn.Linear(dim, hidden), activation()]
@@ -32,14 +30,13 @@ class DiffeoWrapper(nn.Module):
         super().__init__()
         self.diffeo = diffeo_model
 
-    def forward(self, t, x):
-        # ignore t and just call your diffeo_model on x
+    def forward(self, t, x): # noqa
         return self.diffeo(x)
 
 class ConjugateSystem(nn.Module):
-    def __init__(self, F:VectorField, diffeo_model: nn.Module, t: float = 1.0):
+    def __init__(self, f:VectorField, diffeo_model: nn.Module, t: float = 1.0):
         super().__init__()
-        self.F = F
+        self.F = f
         self.model = DiffeoWrapper(diffeo_model)  # compile the ODE model
         # self.model = torch.compile(lambda t,x: diffeo_model(x))  # compile the ODE model
         self.T = t
@@ -54,19 +51,19 @@ class ConjugateSystem(nn.Module):
 
     def conjugate_vector_field(self, y:Tensor):
         x = self.flow_inverse(y)
-        Fx = self.F(x)
+        dx = self.F(x)
         # x.requires_grad_(True)
         y_fwd = self.flow_forward(x)
-        return torch.autograd.grad(y_fwd, x, grad_outputs=Fx, retain_graph=True,
+        return torch.autograd.grad(y_fwd, x, grad_outputs=dx, retain_graph=True,
         create_graph=True)[0]
 
     def forward(self, y:Tensor):
         return self.conjugate_vector_field(y)
 
-    def conjugate_vector_field_batch(self, Y:Tensor):
-        return torch.stack([self.conjugate_vector_field(y) for y in Y])
+    def conjugate_vector_field_batch(self, y:Tensor):
+        return torch.stack([self.conjugate_vector_field(y) for y in y])
 
-def ellipse_transform_from_A(A: torch.Tensor) -> torch.Tensor:
+def ellipse_transform_from_A(A: torch.Tensor) -> torch.Tensor: # noqa
     L_inv = torch.linalg.cholesky(A)
     L = torch.linalg.inv(L_inv)
     return L
@@ -79,14 +76,14 @@ def sample_ellipse_perimeter_from_A(n_points: int, A: torch.Tensor) -> torch.Ten
 
 
 
-def visualize_conjugacy_with_invariant(conjugate_system, F, bounds=(-2, 2), n_points=20, A: torch.Tensor = torch.eye(2)):
+def visualize_conjugacy_with_invariant(conjugate_system, f, bounds=(-2, 2), n_points=20, A: torch.Tensor = torch.eye(2)):
     with torch.device("cpu"):
         xs = np.linspace(bounds[0], bounds[1], n_points)
         ys = np.linspace(bounds[0], bounds[1], n_points)
         grid_x, grid_y = np.meshgrid(xs, ys)
         points = torch.tensor(np.stack([grid_x.ravel(), grid_y.ravel()], axis=-1), dtype=torch.float32)
 
-        F_vals = torch.stack([F(p) for p in points])
+        F_vals = torch.stack([f(p) for p in points])
         U_F = F_vals[:, 0].reshape(n_points, n_points).cpu().numpy()
         V_F = F_vals[:, 1].reshape(n_points, n_points).cpu().numpy()
 
@@ -121,16 +118,16 @@ def visualize_conjugacy_with_invariant(conjugate_system, F, bounds=(-2, 2), n_po
 
         # Plot
         fig, axs = plt.subplots(1, 2, figsize=(12, 6))
-        axs[0].streamplot(xs, ys, U_F, V_F, color='blue', density=1)
-        axs[0].scatter(circle[:, 0], circle[:, 1], s=2, color='black')
-        axs[0].set_title('Original Vector Field F')
+        axs[0].streamplot(xs, ys, U_F, V_F, color="blue", density=1)
+        axs[0].scatter(circle[:, 0], circle[:, 1], s=2, color="black")
+        axs[0].set_title("Original Vector Field F")
         axs[0].set_xlim(bounds)
         axs[0].set_ylim(bounds)
 
-        axs[1].streamplot(xs_g, ys_g, U_G, V_G, color='red', density=1)
-        axs[1].scatter(mapped_circle[:, 0], mapped_circle[:, 1], s=2, color='black')
-        axs[1].scatter(mapped_disk[:, 0], mapped_disk[:, 1], s=1, alpha=0.1, color='gray')
-        axs[1].set_title('Conjugate Vector Field G')
+        axs[1].streamplot(xs_g, ys_g, U_G, V_G, color="red", density=1)
+        axs[1].scatter(mapped_circle[:, 0], mapped_circle[:, 1], s=2, color="black")
+        axs[1].scatter(mapped_disk[:, 0], mapped_disk[:, 1], s=1, alpha=0.1, color="gray")
+        axs[1].set_title("Conjugate Vector Field G")
         axs[1].set_xlim([bounds_g[0], bounds_g[1]])
         axs[1].set_ylim([bounds_g[2], bounds_g[3]])
 
@@ -205,7 +202,7 @@ class LieDerivative(nn.Module):
         )[0]
         eps = torch.finfo(df.dtype).eps
         ell2 = torch.norm(dg - df,p=2, dim=-1)
-        ell2 = torch.nn.functional.mse_loss(dg,df,reduction='sum')
+        ell2 = torch.nn.functional.mse_loss(dg,df,reduction="sum")
         if normalize:
             dg.square().sum(dim=-1)
             dg_norm = dg.square().sum(dim=-1)
@@ -226,13 +223,14 @@ def dynamics_factory(A) -> Callable[[Tensor], Tensor]:
         return x * (1 - r)
     return f
 
-if __name__ == "__main__":
+
+def demo():
     torch.manual_seed(0)
     dim = 2
 
     visualize = False
     if visualize:
-        model = phi(dim, repetitions=1, hidden=32)
+        model = Phi(dim, repetitions=1, hidden=32)
         A = torch.randn(2, 2)
         A = A @ A.T
         f = dynamics_factory(A)
@@ -252,7 +250,7 @@ if __name__ == "__main__":
             case "nonlinear":
                 A = torch.randn(2, 2).requires_grad_(True)
                 A = A @ A.T  # Ensure A is positive definite
-                model = phi(dim, repetitions=1, hidden=32)
+                model = Phi(dim, repetitions=1, hidden=32)
                 f = ConjugateSystem(dynamics_factory(A), model, t=20.0)
             case _:
                 raise ValueError(f"Unknown base {vfield_kind}")
@@ -283,3 +281,12 @@ if __name__ == "__main__":
     testing(vfield_kind)
     vfield_kind = "nonlinear"
     testing(vfield_kind)
+
+if __name__ == "__main__":
+    from jet_dev import _f_torch, compute_jet_torch
+
+    eval_point = torch.tensor([1.0, 2.0], dtype=torch.float32, requires_grad=True)
+    jets_torch = compute_jet_torch(_f_torch, eval_point, order=3)
+
+    for i, jet in enumerate(jets_torch, 1):
+        print(f"{i}th time-derivative of a vector field:", jet)
