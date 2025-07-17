@@ -30,7 +30,7 @@ class GPPrior(nn.Module):
         return gpytorch.distributions.MultitaskMultivariateNormal.from_batch_mvn(
             gpytorch.distributions.MultivariateNormal(mean_x, covar))
 
-class PerturbedVectorField(nn.Module):
+class PerturbedRingAttractorODE(nn.Module):
     """
     PyTorch module for a perturbed radial-attractor vector field.
 
@@ -75,7 +75,7 @@ class PerturbedVectorField(nn.Module):
         # with torch.no_grad():
         UV_grid = gp_model(pts_t).sample()
 
-        U_grid,V_grid = UV_grid.renorm(p=2,dim=1,maxnorm=perturbation_magnitude).vsplit(2)
+        U_grid,V_grid = UV_grid.renorm(p=2,dim=0,maxnorm=perturbation_magnitude).vsplit(2)
 
         # Register buffers
         self.register_buffer("x_grid", torch.from_numpy(x_grid.astype(np.float32)))
@@ -133,10 +133,10 @@ def sample_gauss_z(
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     # Visualize with a stream plot
-    vb = PerturbedVectorField(perturbation_magnitude=0.0,
-                              grid_size=(40),
-                              domain_extent=(-3.0,3.0),
-                              lengthscale=1.0)
+    vb = PerturbedRingAttractorODE(perturbation_magnitude=0.0,
+                                   grid_size=(40),
+                                   domain_extent=(-3.0,3.0),
+                                   lengthscale=1.0)
 
     # Create plotting grid
     x = vb.x_grid.cpu().numpy()
@@ -148,8 +148,8 @@ if __name__ == "__main__":
     # Evaluate vector field
     # with torch.no_grad():
     vals = vb(pts_t)
-    U = vals[:,0].cpu().numpy().reshape(Y.shape)
-    V = vals[:,1].cpu().numpy().reshape(Y.shape)
+    U = vals[:,0].detach().cpu().numpy().reshape(Y.shape)
+    V = vals[:,1].detach().cpu().numpy().reshape(Y.shape)
 
     # Plot
     plt.figure(figsize=(6,6))
