@@ -1,9 +1,10 @@
+from typing import Callable, Optional, Tuple, Union
+
+import gpytorch
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import gpytorch
-from typing import Tuple, Union, Optional,Callable
 
 
 class GPPrior(nn.Module):
@@ -71,20 +72,16 @@ class PerturbedVectorField(nn.Module):
         # Sample GP prior for U and V components
         gp_model = GPPrior(train_x=pts_t, lengthscale=lengthscale, noise=noise)
         gp_model.eval()
-        with torch.no_grad():
-            UV_grid = gp_model(pts_t).sample()
-            # dist_u = gp_model(pts_t)
-            # dist_v = gp_model(pts_t)
-            # U_samples = dist_u.sample().cpu()
-            # V_samples = dist_v.sample().cpu()
+        # with torch.no_grad():
+        UV_grid = gp_model(pts_t).sample()
 
         U_grid,V_grid = UV_grid.renorm(p=2,dim=1,maxnorm=perturbation_magnitude).vsplit(2)
 
         # Register buffers
-        self.register_buffer('x_grid', torch.from_numpy(x_grid.astype(np.float32)))
-        self.register_buffer('y_grid', torch.from_numpy(y_grid.astype(np.float32)))
-        self.register_buffer('perturb_u', U_grid.unsqueeze(0).unsqueeze(0))
-        self.register_buffer('perturb_v', V_grid.unsqueeze(0).unsqueeze(0))
+        self.register_buffer("x_grid", torch.from_numpy(x_grid.astype(np.float32)))
+        self.register_buffer("y_grid", torch.from_numpy(y_grid.astype(np.float32)))
+        self.register_buffer("perturb_u", U_grid.unsqueeze(0).unsqueeze(0))
+        self.register_buffer("perturb_v", V_grid.unsqueeze(0).unsqueeze(0))
         self.x_min, self.x_max = x_min, x_max
         self.y_min, self.y_max = y_min, y_max
 
@@ -94,7 +91,7 @@ class PerturbedVectorField(nn.Module):
         yi = 2 * (x[...,1] - self.y_min) / (self.y_max - self.y_min) - 1
         pts = torch.stack((xi, yi), dim=-1)
         pts = pts.unsqueeze(0).unsqueeze(0)
-        sampled = F.grid_sample(field, pts, align_corners=True, mode='bilinear')
+        sampled = F.grid_sample(field, pts, align_corners=True, mode="bilinear")
         return sampled.squeeze()
 
     def forward(self, x: torch.Tensor, t: Optional[torch.Tensor] = torch.tensor(0)) -> torch.Tensor:
@@ -146,18 +143,18 @@ if __name__ == "__main__":
     y = vb.y_grid.cpu().numpy()
     X, Y = np.meshgrid(x, y)
     pts = np.column_stack([X.ravel(), Y.ravel()])
-    pts_t = torch.from_numpy(pts.astype(np.float32))
+    pts_t = torch.tensor(pts.astype(np.float32), requires_grad=True)
 
     # Evaluate vector field
-    with torch.no_grad():
-        vals = vb(pts_t)
+    # with torch.no_grad():
+    vals = vb(pts_t)
     U = vals[:,0].cpu().numpy().reshape(Y.shape)
     V = vals[:,1].cpu().numpy().reshape(Y.shape)
 
     # Plot
     plt.figure(figsize=(6,6))
     plt.streamplot(X, Y, U, V, density=1.2)
-    plt.title('Perturbed Radial-Attractor Vector Field')
-    plt.xlabel('x')
-    plt.ylabel('y')
+    plt.title("Perturbed Radial-Attractor Vector Field")
+    plt.xlabel("x")
+    plt.ylabel("y")
     plt.show()
