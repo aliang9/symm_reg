@@ -14,7 +14,7 @@ T: TypeAlias = Tensor
 class AbstractRegularizer(ABC):  # Inherit from ABC to make it an abstract class
 
     def regularizer(self, x:T) -> T:
-        self.eval_regularizer(x).sum()
+        return self.eval_regularizer(x).sum()
 
     @abstractmethod
     def eval_regularizer(self, x:T) -> T:
