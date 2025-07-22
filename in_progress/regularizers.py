@@ -7,7 +7,7 @@ import torch
 from torch import nn, Tensor
 from torch._functorch.eager_transforms import _jvp_with_argnums
 
-from in_progress import VectorField
+from __init__ import VectorField
 T: TypeAlias = Tensor
 
 

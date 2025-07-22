@@ -9,8 +9,8 @@ from torch import Tensor
 from test_dynamics import RbfPerturbedRingAttractorODE # noqa: E402
 from itertools import zip_longest, product
 
-from in_progress.test_dynamics import _odeint, Phi, ConjugateSystem, dynamics_factory
-from in_progress.regularizers import LieDerivativeRegularizer, _compute_jet
+from test_dynamics import _odeint, Phi, ConjugateSystem, dynamics_factory
+from regularizers import LieDerivativeRegularizer, _compute_jet
 
 SupportedRegularizers: TypeAlias = Literal["lie", "lie_normalized","lie_normalized_new", "j2", "j3", "j4", "k1"]
 
@@ -63,8 +63,7 @@ def _meshgrid(bounds, n_points, grid):
         if isinstance(bounds[0], tuple):
             xs = np.linspace(bounds[0][0], bounds[0][1], n_points)
             y0, y1 = bounds[1]
-            step = (y1 - y0) / (n_points - 1)
-            ys = np.arange(y0, y1 + step, step)
+            ys = np.linspace(y0, y1, n_points)
         else:
             xs = np.linspace(bounds[0], bounds[1], n_points)
             ys = np.linspace(bounds[0], bounds[1], n_points)
@@ -185,14 +184,14 @@ def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSys
                      np.nanmax(np.stack(regularizer_vals).ravel())+ 1e-8)
     # norm = colors.Normalize(vmin=np.min(datasets), vmax=np.max(datasets))
 
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
     ax1.streamplot(
         xs, ys, U_F, V_F, color="blue" if not regularizer else None, density=1
     )
     ax1.scatter(circle[:, 0], circle[:, 1], s=2, color="black")
     if regularizer:
         Z = regularizer_vals[0]
-        ax1.imshow(
+        im1 = ax1.imshow(
             Z,
             extent=[xs.min(), xs.max(), ys.min(), ys.max()],
             origin="lower",
@@ -209,7 +208,7 @@ def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSys
     ax2.scatter(mapped_circle[:, 0], mapped_circle[:, 1], s=2, color="black")
     if regularizer:
         Z = regularizer_vals[1]
-        ax2.imshow(
+        im2 = ax2.imshow(
             Z,
             extent=[xs_g.min(), xs_g.max(), ys_g.min(), ys_g.max()],
             origin="lower",
@@ -227,7 +226,7 @@ def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSys
     # ax3.scatter(circle[:, 0], circle[:, 1], s=2, color="black")
     if regularizer:
         Z = regularizer_vals[2]
-        ax3.imshow(
+        im3 = ax3.imshow(
             Z,
             extent=[xs.min(), xs.max(), ys.min(), ys.max()],
             origin="lower",
@@ -242,6 +241,12 @@ def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSys
         perturbed_title = "Perturbed Vector Field F"
 
     ax3.set_title(perturbed_title)
+    
+    # Add individual colorbars for each heatmap
+    if regularizer:
+        cbar1 = fig.colorbar(im1, ax=ax1, orientation='vertical', shrink=0.6, aspect=30)
+        cbar2 = fig.colorbar(im2, ax=ax2, orientation='vertical', shrink=0.6, aspect=30)
+        cbar3 = fig.colorbar(im3, ax=ax3, orientation='vertical', shrink=0.6, aspect=30)
     if regularizer:
         fig.suptitle(f"Values of the {regularizer_suptitle} regularizer for F, G and perturbed F")
     else:
@@ -315,7 +320,7 @@ def plot_regularization():
     perturbation_hypers = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     perturbation_hypers = [0.2]
     regularizer_hypers: List[SupportedRegularizers] = ["k1","lie", "lie_normalized", "j2", "j3", "j4"]
-    regularizer_hypers: List[SupportedRegularizers] = ["lie_normalized_new","lie", "lie_normalized"]
+    regularizer_hypers: List[SupportedRegularizers] = ["lie_normalized_new","lie", "lie_normalized", "k1"]
 
     for regularizer, pm in product(regularizer_hypers, perturbation_hypers):
         torch.manual_seed(0)
@@ -333,3 +338,4 @@ def plot_regularization():
 
 if __name__ == "__main__":
     plot_regularization()
+    # animate_regularization()
