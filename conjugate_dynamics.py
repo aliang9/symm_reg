@@ -131,8 +131,9 @@ def visualize_conjugacy_with_invariant(conjugate_system, f, bounds=(-2, 2), n_po
 		axs[1].set_xlim([bounds_g[0], bounds_g[1]])
 		axs[1].set_ylim([bounds_g[2], bounds_g[3]])
 
-		plt.tight_layout()
-		plt.show()
+        plt.tight_layout()
+        plt.show()
+        plt.savefig('demo.png')
 
 
 class LieDerivative(nn.Module):

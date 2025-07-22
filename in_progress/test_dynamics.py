@@ -12,7 +12,7 @@ from functools import wraps
 from torch import Tensor
 from torchdyn.numerics import odeint as _td_odeint
 
-from in_progress import VectorField
+from __init__ import VectorField
 
 nn_activation: TypeAlias = torch.nn.modules.activation
 _odeint = lambda f_, x_, t_, **kwargs:_td_odeint(f_, x_, t_, solver ="tsit5", **kwargs)[-1]
