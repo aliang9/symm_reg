@@ -206,7 +206,7 @@ def run_experiment(
     store_object_callback = StoreObjectsInBestCheckpoint(store_data)
 
     early_stop_callback = EarlyStopping(
-        monitor="valid_loss", min_delta=0.00, patience=5, verbose=False, mode="min"
+        monitor="valid_loss", min_delta=0.00, patience=2, verbose=False, mode="min"
     )
     callback_list = [ckpt_callback, early_stop_callback, store_object_callback]
     trainer = pl.Trainer(
