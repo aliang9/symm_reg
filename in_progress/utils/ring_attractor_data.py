@@ -4,7 +4,7 @@ from typing_extensions import Required, NotRequired  # noqa
 from xfads import utils as utils
 
 from in_progress.test_dynamics import WarpedRingAttractorRNN, PerturbedRingAttractorRNN  # noqa
-from in_progress.utils.xyzzzz import rng_state_noop
+from in_progress.utils.random import rng_state_noop
 from copy import deepcopy
 import torch
 from omegaconf import DictConfig
