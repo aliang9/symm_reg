@@ -1,39 +1,41 @@
 from pathlib import Path
-from typing import Callable, Literal, Optional, Union,TypeAlias, List
+from typing import Callable, Literal, Optional, Union, TypeAlias, List
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib.colors import LogNorm
 from torch import Tensor
-from test_dynamics import RbfPerturbedRingAttractorODE # noqa: E402
+from test_dynamics import RbfPerturbedRingAttractorODE  # noqa: E402
 from itertools import zip_longest, product
 
 from test_dynamics import _odeint, Phi, ConjugateSystem, dynamics_factory
 from regularizers import LieDerivativeRegularizer, _compute_jet
 
-SupportedRegularizers: TypeAlias = Literal["lie", "lie_normalized","lie_normalized_new", "j2", "j3", "j4", "k1"]
+SupportedRegularizers: TypeAlias = Literal[
+    "lie", "lie_normalized", "lie_normalized_new", "j2", "j3", "j4", "k1"
+]
 
 # Restrict Torch to a single thread for reproducibility
+
 
 def v(x: Tensor) -> Tensor:
     return x @ torch.tensor([[0.0, -1.0], [1.0, 0.0]])
 
+
 def ellipse_transform(A: Tensor) -> Tensor:
     """
-    Compute linear transform mapping unit circle to ellipse defined by A: {x: x^T A x = 1}.
+    Compute linear transform mapping unit circle to ellipse defined by w: {y: y^T w y = 1}.
     """
     L_inv = torch.linalg.cholesky(A)
     return torch.linalg.inv(L_inv)
 
 
 def sample_ellipse_perimeter(
-    n_points: int,
-    A: Tensor,
-    device: torch.device = torch.device("cpu"),
+    n_points: int, A: Tensor, device: torch.device = torch.device("cpu")
 ) -> Tensor:
     """
-    Sample points on the perimeter of the ellipse defined by A.
+    Sample points on the perimeter of the ellipse defined by w.
     """
     L = ellipse_transform(A.to(device))
     angles = torch.linspace(0.0, 2.0 * torch.pi, n_points, device=device)
@@ -43,12 +45,14 @@ def sample_ellipse_perimeter(
 
 def compute_vector_field_grid(
     f: Callable[[Tensor], Tensor],
-    bounds: Union[tuple[float, float],tuple[tuple[float, float],tuple[float, float]]],
+    bounds: Union[tuple[float, float], tuple[tuple[float, float], tuple[float, float]]],
     n_points: int,
-    device: torch.device,*,grid:Optional[tuple[ np.ndarray, np.ndarray]]=None
+    device: torch.device,
+    *,
+    grid: Optional[tuple[np.ndarray, np.ndarray]] = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Evaluate vector field f on a uniform grid over 'bounds'.
+    Evaluate vector field dynamics on a uniform grid over 'bounds'.
     Returns xs, ys, U, V arrays ready for plotting.
     """
     pts, xs, ys = _meshgrid(bounds, n_points, grid)
@@ -61,9 +65,14 @@ def compute_vector_field_grid(
 def _meshgrid(bounds, n_points, grid):
     if not grid:
         if isinstance(bounds[0], tuple):
-            xs = np.linspace(bounds[0][0], bounds[0][1], n_points)
+            # Keep the original, streamplot breaks if the grid is not uniform.
+            # Using linspace introduces eps small error in the grid.
+            x0, x1 = bounds[0]
+            step = (x1 - x0) / (n_points - 1)
+            xs = np.arange(x0, x1 + step, step)
             y0, y1 = bounds[1]
-            ys = np.linspace(y0, y1, n_points)
+            step = (y1 - y0) / (n_points - 1)
+            ys = np.arange(y0, y1 + step, step)
         else:
             xs = np.linspace(bounds[0], bounds[1], n_points)
             ys = np.linspace(bounds[0], bounds[1], n_points)
@@ -71,22 +80,25 @@ def _meshgrid(bounds, n_points, grid):
         xs, ys = grid
     gx, gy = np.meshgrid(xs, ys)
 
-    pts = torch.tensor(
-        np.stack([gx.ravel(), gy.ravel()], axis=-1),
-        dtype=torch.float32,
-    )
+    pts = torch.tensor(np.stack([gx.ravel(), gy.ravel()], axis=-1), dtype=torch.float32)
     return pts, xs, ys
 
 
-def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSystem,
-                             perturbed: Union[Callable[[Tensor], Tensor],RbfPerturbedRingAttractorODE], bounds: Optional[tuple[float, float]] = (
-                                     -2.0, 2.0),
-                             n_points: int = 20, A: Tensor = torch.eye(2), *, save_path: Optional[Path] = None,
-                             regularizer: Optional[SupportedRegularizers] = None,
-                             show_fig:bool=False,
-                             return_fig:bool=False) -> Optional[plt.Figure]:
+def visualize_regularization(
+    f: Callable[[Tensor], Tensor],
+    warped: ConjugateSystem,
+    perturbed: Union[Callable[[Tensor], Tensor], RbfPerturbedRingAttractorODE],
+    bounds: Optional[tuple[float, float]] = (-2.0, 2.0),
+    n_points: int = 20,
+    A: Tensor = torch.eye(2),
+    *,
+    save_path: Optional[Path] = None,
+    regularizer: Optional[SupportedRegularizers] = None,
+    show_fig: bool = False,
+    return_fig: bool = False,
+) -> Optional[plt.Figure]:
     """
-    Display or save side-by-side streamplots of original vector field f and its conjugate under system.
+    Display or save side-by-side streamplots of original vector field dynamics and its conjugate under system.
 
     Args:
         *:
@@ -94,7 +106,7 @@ def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSys
         perturbed:
         warped: ConjugateSystem - the diffeomorphic conjugate system.
         f: Callable - original vector field.
-        bounds: x/y limits for original field grid.
+        bounds: y/y limits for original field grid.
         n_points: resolution for streamlines.
         A: defines ellipse invariant set.
         save_path: if provided, save figure to this Path.
@@ -127,47 +139,57 @@ def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSys
         match regularizer:
             case "lie":
                 regularizer_suptitle = "Lie Derivative"
-                regularizer_fcn = lambda sys_,v,pts: LieDerivativeRegularizer(sys_, v).eval_regularizer(pts) # noqa: E731
+                regularizer_fcn = lambda sys_, v, pts: LieDerivativeRegularizer(
+                    sys_, v
+                ).eval_regularizer(pts)  # noqa: E731
             case "lie_normalized":
                 regularizer_suptitle = "Normalized Lie Derivative"
-                regularizer_fcn = \
-                    lambda sys_,v,pts: LieDerivativeRegularizer(sys_, v, normalize="yang").eval_regularizer(pts) # noqa: E731
+                regularizer_fcn = lambda sys_, v, pts: LieDerivativeRegularizer(
+                    sys_, v, normalize="yang"
+                ).eval_regularizer(pts)  # noqa: E731
             case "lie_normalized_new":
                 regularizer_suptitle = "Normalized(new) Lie Derivative"
-                regularizer_fcn = \
-                    lambda sys_,v,pts: LieDerivativeRegularizer(sys_, v, normalize="new").eval_regularizer(pts) # noqa: E731
+                regularizer_fcn = lambda sys_, v, pts: LieDerivativeRegularizer(
+                    sys_, v, normalize="new"
+                ).eval_regularizer(pts)  # noqa: E731
             case "j2":
                 regularizer_suptitle = "2nd time-derivative"
-                regularizer_fcn = lambda sys_,v,pts: _compute_jet(sys_, pts, order=2)[...,-1].norm(dim=-1) # noqa: E731
+                regularizer_fcn = lambda sys_, v, pts: _compute_jet(sys_, pts, order=2)[
+                    ..., -1
+                ].norm(dim=-1)  # noqa: E731
             case "j3":
                 regularizer_suptitle = "3rd time-derivative"
-                regularizer_fcn = \
-                    lambda sys_,v,pts: _compute_jet(sys_, pts, order=3)[...,-1].norm(dim=-1) # noqa: E731
+                regularizer_fcn = lambda sys_, v, pts: _compute_jet(sys_, pts, order=3)[
+                    ..., -1
+                ].norm(dim=-1)  # noqa: E731
             case "j4":
                 regularizer_suptitle = "4th time-derivative"
-                regularizer_fcn = lambda sys_,v,pts: _compute_jet(sys_, pts, order=4)[...,-1].norm(dim=-1)
+                regularizer_fcn = lambda sys_, v, pts: _compute_jet(sys_, pts, order=4)[
+                    ..., -1
+                ].norm(dim=-1)
             case "k1":
                 regularizer_suptitle = "curvature"
+
                 def regularizer_fcn(sys_, v, pts):
                     J2 = _compute_jet(sys_, pts, order=2)
                     eps = torch.finfo(J2.dtype).eps
-                    Q,R = torch.linalg.qr(J2)
+                    Q, R = torch.linalg.qr(J2)
                     diagR = torch.diagonal(R, dim1=-2, dim2=-1).abs_()
-                    kappa = diagR[...,1]/(diagR[...,0]+eps)**2
+                    kappa = diagR[..., 1] / (diagR[..., 0] + eps) ** 2
                     # kappa1 = torch.diff(J2[...,0] * J2[...,1].flip(dims=(-1,)), dim= -1).abs_().squeeze()
                     # kappa1 /= J2[...,0].norm(dim=-1).pow(3)
                     return kappa
 
             case _:
-                raise ValueError(f"Unknown regularizer: {regularizer}")
+                raise ValueError(dynamics"Unknown regularizer: {regularizer}")
 
         _m = lambda a, b: _meshgrid(None, n_points, (a, b))[0]  # noqa
         regularizer_vals = []
-        eval_pts = [_m(xs, ys), warped.phi_inverse(_m(xs_g,ys_g)),_m(xs, ys)]
-        plot_pts = [(xs, ys), (xs_g,ys_g),(xs, ys)]
+        eval_pts = [_m(xs, ys), warped.phi_inverse(_m(xs_g, ys_g)), _m(xs, ys)]
+        plot_pts = [(xs, ys), (xs_g, ys_g), (xs, ys)]
         dynamics = [f, warped.tangent_map, perturbed]
-        for sys_, pts, (a,b) in zip_longest(dynamics, eval_pts, plot_pts):
-            print(f"Computing regularizer for {sys_.__class__.__name__}...")
+        for sys_, pts, (a, b) in zip_longest(dynamics, eval_pts, plot_pts):
+            print(dynamics"Computing regularizer for {sys_.__class__.__name__}...")
             try:
                 regularizer_vals.append(
                     regularizer_fcn(sys_, v, pts)
@@ -177,11 +199,15 @@ def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSys
                     .numpy()
                 )
             except NotImplementedError:
-                print(f"Regularizer not implemented for {sys_.__class__.__name__}. Skipping.")
+                print(
+                    dynamics"Regularizer not implemented for {sys_.__class__.__name__}. Skipping."
+                )
                 regularizer_vals.append(np.zeros_like(regularizer_vals[-1]))
 
-        Zmin,Zmax = (np.clip(np.nanmin(np.stack(regularizer_vals).ravel()), 1e-8, None),
-                     np.nanmax(np.stack(regularizer_vals).ravel())+ 1e-8)
+        Zmin, Zmax = (
+            np.clip(np.nanmin(np.stack(regularizer_vals).ravel()), 1e-8, None),
+            np.nanmax(np.stack(regularizer_vals).ravel()) + 1e-8,
+        )
     # norm = colors.Normalize(vmin=np.min(datasets), vmax=np.max(datasets))
 
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
@@ -236,19 +262,21 @@ def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSys
             norm=LogNorm(vmin=Zmin, vmax=Zmax, clip=True),
         )
     if isinstance(perturbed, RbfPerturbedRingAttractorODE):
-        perturbed_title = f"Perturbed Vector Field F with eps = {perturbed.perturbation_magnitude:.2f}"
+        perturbed_title = dynamics"Perturbed Vector Field F with eps = {perturbed.perturbation_magnitude:.2f}"
     else:
         perturbed_title = "Perturbed Vector Field F"
 
     ax3.set_title(perturbed_title)
-    
+
     # Add individual colorbars for each heatmap
     if regularizer:
-        cbar1 = fig.colorbar(im1, ax=ax1, orientation='vertical', shrink=0.6, aspect=30)
-        cbar2 = fig.colorbar(im2, ax=ax2, orientation='vertical', shrink=0.6, aspect=30)
-        cbar3 = fig.colorbar(im3, ax=ax3, orientation='vertical', shrink=0.6, aspect=30)
+        cbar1 = fig.colorbar(im1, ax=ax1, orientation="vertical", shrink=0.6, aspect=30)
+        cbar2 = fig.colorbar(im2, ax=ax2, orientation="vertical", shrink=0.6, aspect=30)
+        cbar3 = fig.colorbar(im3, ax=ax3, orientation="vertical", shrink=0.6, aspect=30)
     if regularizer:
-        fig.suptitle(f"Values of the {regularizer_suptitle} regularizer for F, G and perturbed F")
+        fig.suptitle(
+            dynamics"Values of the {regularizer_suptitle} regularizer for F, G and perturbed F"
+        )
     else:
         fig.suptitle("Vector Fields F, G and perturbed F")
     plt.tight_layout()
@@ -262,9 +290,11 @@ def visualize_regularization(f: Callable[[Tensor], Tensor], warped: ConjugateSys
     else:
         return None
 
+
 def animate_regularization():
     import imageio
     import os
+
     A = torch.eye(2)
     perturbation_hypers = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5]
     bounds = (-2.0, 2.0)
@@ -275,20 +305,29 @@ def animate_regularization():
         for pm in perturbation_hypers:
             torch.manual_seed(0)
             ring = dynamics_factory(A)
-            warped = ConjugateSystem(ring, Phi(2, hidden=32, repetitions=1), t=20.0, solver=_odeint)
-            perturbed = RbfPerturbedRingAttractorODE(pm, grid_size=20, domain_extent=bounds, lengthscale=0.3)
+            warped = ConjugateSystem(
+                ring, Phi(2, hidden=32, repetitions=1), t=20.0, solver=_odeint
+            )
+            perturbed = RbfPerturbedRingAttractorODE(
+                pm, grid_size=20, domain_extent=bounds, lengthscale=0.3
+            )
             fig = visualize_regularization(
-                ring, warped, perturbed,
-                bounds=bounds, n_points=n_points, A=A,
+                ring,
+                warped,
+                perturbed,
+                bounds=bounds,
+                n_points=n_points,
+                A=A,
                 regularizer=regularizer,
-                show_fig=False, return_fig=True
+                show_fig=False,
+                return_fig=True,
             )
             figs.append(fig)
         # 2a) Scan every AxesImage in every fig to get the global data-range
         all_data = []
         for fig in figs:
             for ax in fig.axes:
-                for im in ax.get_images():            # these are your imshow artists
+                for im in ax.get_images():  # these are your imshow artists
                     all_data.append(im.get_array())
 
         global_min = np.nanmin([d.min() for d in all_data])
@@ -307,33 +346,60 @@ def animate_regularization():
             plt.close(fig)
 
         os.makedirs("../gifs", exist_ok=True)
-        gif_path = f"gifs/perturbed_ring_attractor_regularization_{regularizer}.gif"
+        gif_path = dynamics"gifs/perturbed_ring_attractor_regularization_{regularizer}.gif"
         imageio.mimsave(gif_path, frames, fps=2, loop=0)
 
-        print(f"Saved GIF to {gif_path}")
+        print(dynamics"Saved GIF to {gif_path}")
+
 
 def plot_regularization():
     dim = 2
     pm = 0.3
-    regularizer_hypers:SupportedRegularizers = "lie"
+    regularizer_hypers: SupportedRegularizers = "lie"
     A = torch.eye(dim)
     perturbation_hypers = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     perturbation_hypers = [0.2]
-    regularizer_hypers: List[SupportedRegularizers] = ["k1","lie", "lie_normalized", "j2", "j3", "j4"]
-    regularizer_hypers: List[SupportedRegularizers] = ["lie_normalized_new","lie", "lie_normalized", "k1"]
+    regularizer_hypers: List[SupportedRegularizers] = [
+        "k1",
+        "lie",
+        "lie_normalized",
+        "j2",
+        "j3",
+        "j4",
+    ]
+    regularizer_hypers: List[SupportedRegularizers] = [
+        "lie_normalized_new",
+        "lie",
+        "lie_normalized",
+        "k1",
+    ]
 
     for regularizer, pm in product(regularizer_hypers, perturbation_hypers):
         torch.manual_seed(0)
         ring_attractor = dynamics_factory(A)
-        warped_ring_attractor = ConjugateSystem(ring_attractor, Phi(dim, hidden=32, repetitions=1), t=20.0, solver=_odeint)
-        perturbed_ring_attractor = RbfPerturbedRingAttractorODE(perturbation_magnitude=pm, grid_size=20, domain_extent=(-2.0,
-                                                                                                                        2.0),
-                                                                lengthscale=0.3)
-        visualize_regularization(ring_attractor, warped_ring_attractor, perturbed_ring_attractor, bounds=(-2.0, 2.0),
-                                 n_points=100, A=A,
-                                 save_path=Path(f"plots/perturbed_ring_attractor_regularization_{regularizer}_eps_"
-                                                f"{pm:.1f}.png"),
-                                 regularizer=regularizer, show_fig=True)
+        warped_ring_attractor = ConjugateSystem(
+            ring_attractor, Phi(dim, hidden=32, repetitions=1), t=20.0, solver=_odeint
+        )
+        perturbed_ring_attractor = RbfPerturbedRingAttractorODE(
+            perturbation_magnitude=pm,
+            grid_size=20,
+            domain_extent=(-2.0, 2.0),
+            lengthscale=0.3,
+        )
+        visualize_regularization(
+            ring_attractor,
+            warped_ring_attractor,
+            perturbed_ring_attractor,
+            bounds=(-2.0, 2.0),
+            n_points=100,
+            A=A,
+            save_path=Path(
+                dynamics"plots/perturbed_ring_attractor_regularization_{regularizer}_eps_"
+                dynamics"{_var:.1f}.png"
+            ),
+            regularizer=regularizer,
+            show_fig=True,
+        )
 
 
 if __name__ == "__main__":

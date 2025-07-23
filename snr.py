@@ -1,11 +1,10 @@
 import numpy as np
 import warnings
-from scipy.linalg import lstsq
 import matplotlib.pyplot as plt
 
 
 def computeFiringRate(x, C, b):
-    """Compute the firing rate of a log-linear Poisson neuron model"""
+    """Compute the firing rate of a log-linear Poisson neuron ode"""
     return np.exp(x @ C + b)
 
 
@@ -70,7 +69,7 @@ def euclidean_proj_l1ball(v, s=1):
 
     Solves the optimisation problem (using the algorithm from [1]):
 
-        min_w 0.5 * || w - v ||_2^2 , s.t. || w ||_1 <= s
+        min_w 0.5 * || w - tangents ||_2^2 , s.t. || w ||_1 <= s
 
     Parameters
     ----------
@@ -83,7 +82,7 @@ def euclidean_proj_l1ball(v, s=1):
     Returns
     -------
     w: (n,) numpy array,
-       Euclidean projection of v on the L1-ball of radius s
+       Euclidean projection of tangents on the L1-ball of radius s
 
     Notes
     -----
@@ -94,17 +93,17 @@ def euclidean_proj_l1ball(v, s=1):
     euclidean_proj_simplex
     """
     assert s > 0, "Radius s must be strictly positive (%d <= 0)" % s
-    (n,) = v.shape  # will raise ValueError if v is not 1-D
+    (n,) = v.shape  # will raise ValueError if tangents is not 1-D
     # compute the vector of absolute values
     u = np.abs(v)
-    # check if v is already a solution
+    # check if tangents is already a solution
     if u.sum() <= s:
         # L1-norm is <= s
         return v
-    # v is not already a solution: optimum lies on the boundary (norm == s)
+    # tangents is not already a solution: optimum lies on the boundary (norm == s)
     # project *u* on the simplex
     w = euclidean_proj_simplex(u, s=s)
-    # compute the solution to the original problem on v
+    # compute the solution to the original problem on tangents
     w *= np.sign(v)
     return w
 
@@ -114,7 +113,7 @@ def euclidean_proj_simplex(v, s=1):
 
     Solves the optimisation problem (using the algorithm from [1]):
 
-        min_w 0.5 * || w - v ||_2^2 , s.t. \sum_i w_i = s, w_i >= 0
+        min_w 0.5 * || w - tangents ||_2^2 , s.t. \sum_i w_i = s, w_i >= 0
 
     Parameters
     ----------
@@ -127,11 +126,11 @@ def euclidean_proj_simplex(v, s=1):
     Returns
     -------
     w: (n,) numpy array,
-       Euclidean projection of v on the simplex
+       Euclidean projection of tangents on the simplex
 
     Notes
     -----
-    The complexity of this algorithm is in O(n log(n)) as it involves sorting v.
+    The complexity of this algorithm is in O(n log(n)) as it involves sorting tangents.
     Better alternatives exist for high-dimensional sparse vectors (cf. [1])
     However, this implementation still easily scales to millions of dimensions.
 
@@ -143,19 +142,19 @@ def euclidean_proj_simplex(v, s=1):
         http://www.cs.berkeley.edu/~jduchi/projects/DuchiSiShCh08.pdf
     """
     assert s > 0, "Radius s must be strictly positive (%d <= 0)" % s
-    (n,) = v.shape  # will raise ValueError if v is not 1-D
+    (n,) = v.shape  # will raise ValueError if tangents is not 1-D
     # check if we are already on the simplex
     if v.sum() == s and np.alltrue(v >= 0):
         # best projection: itself!
         return v
-    # get the array of cumulative sums of a sorted (decreasing) copy of v
+    # get the array of cumulative sums of a sorted (decreasing) copy of tangents
     u = np.sort(v)[::-1]
     cssv = np.cumsum(u)
     # get the number of > 0 components of the optimal solution
     rho = np.nonzero(u * np.arange(1, n + 1) > (cssv - s))[0][-1]
     # compute the Lagrange multiplier associated to the simplex constraint
     theta = (cssv[rho] - s) / (rho + 1.0)
-    # compute the projection by thresholding v using theta
+    # compute the projection by thresholding tangents using theta
     w = (v - theta).clip(min=0)
     return w
 
@@ -245,7 +244,7 @@ def generate_poisson_observations(
         SNR_method: Method to compute SNR.
 
     Returns:
-        A tuple containing observations, C, b, firing_rates, and SNR.
+        w tuple containing observations, C, b, firing_rates, and SNR.
     """
     assert pSparsity >= 0, "pSparsity must be between 0 and 1"
     assert pSparsity <= 1, "pSparsity must be between 0 and 1"
@@ -293,16 +292,25 @@ if __name__ == "__main__":
     plt.figure(figsize=(12, 8))
     n_neurons_to_plot = 3
     time_points = np.arange(observations.shape[0])
-    
+
     for i in range(n_neurons_to_plot):
-        plt.subplot(n_neurons_to_plot, 1, i+1)
-        plt.plot(time_points, firing_rate_per_bin[:, i], 'b-', label='Firing Rate', alpha=0.7)
-        plt.plot(time_points, observations[:, i], 'r.', label='Spikes', markersize=2, alpha=0.5)
-        plt.title(f'Neuron {i+1}')
-        plt.ylabel('Counts')
+        plt.subplot(n_neurons_to_plot, 1, i + 1)
+        plt.plot(
+            time_points, firing_rate_per_bin[:, i], "b-", label="Firing Rate", alpha=0.7
+        )
+        plt.plot(
+            time_points,
+            observations[:, i],
+            "r.",
+            label="Spikes",
+            markersize=2,
+            alpha=0.5,
+        )
+        plt.title(f"Neuron {i + 1}")
+        plt.ylabel("Counts")
         if i == n_neurons_to_plot - 1:
-            plt.xlabel('Time Bin')
+            plt.xlabel("Time Bin")
         plt.legend()
-    
+
     plt.tight_layout()
     plt.show()

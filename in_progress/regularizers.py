@@ -7,17 +7,18 @@ import torch
 from torch import nn, Tensor
 from torch._functorch.eager_transforms import _jvp_with_argnums
 
-from __init__ import VectorField
+from in_progress import VectorField
+from in_progress.test_dynamics import ModuleWrapperBase
+
 T: TypeAlias = Tensor
 
 
 class AbstractRegularizer(ABC):  # Inherit from ABC to make it an abstract class
-
-    def regularizer(self, x:T) -> T:
+    def regularizer(self, x: T) -> T:
         return self.eval_regularizer(x).sum()
 
     @abstractmethod
-    def eval_regularizer(self, x:T) -> T:
+    def eval_regularizer(self, x: T) -> T:
         pass
 
     @staticmethod
@@ -28,12 +29,13 @@ class AbstractRegularizer(ABC):  # Inherit from ABC to make it an abstract class
 
     @property
     @abstractmethod
-    def f(self,*args,**kwargs) -> T:
+    def f(self, *args, **kwargs) -> T:
         """
         This method should be implemented to return the vector field.
         It can be a callable or an nn.Module.
         """
         pass
+
 
 class CurvatureRegularizer(nn.Module, AbstractRegularizer):
     def __init__(self, f: VectorField, *args, order=1, **kwargs):
@@ -45,32 +47,38 @@ class CurvatureRegularizer(nn.Module, AbstractRegularizer):
     @property
     def f(self) -> nn.Module:
         return self._f
-    def eval_regularizer(self, x:T)->T:
-        J2 = _compute_jet(self.f, x, order=self.order+1)
+
+    def eval_regularizer(self, x: T) -> T:
+        J2 = _compute_jet(self.f, x, order=self.order + 1)
         eps = torch.finfo(J2.dtype).eps
         Q, R = torch.linalg.qr(J2)
-        diagR = torch.diagonal(R, dim1=-2, dim2=-1).abs_()
+        diagR = torch.diagonal(R, dim1=-2, dim2=-1).abs()
         # kappa = diagR[..., 1] / (diagR[..., 0] + eps) ** 2
         i = self.order
         if i == 1:
-            return diagR[..., i] / (diagR[..., 0]** 2 + eps)
+            return diagR[..., i] / (diagR[..., 0] ** 2 + eps)
         else:
-            return diagR[..., i] / (diagR[..., 0] * diagR[..., i-1] + eps)
+            return diagR[..., i] / (diagR[..., 0] * diagR[..., i - 1] + eps)
 
 
-
-class LieDerivativeRegularizer(nn.Module, AbstractRegularizer):
+class LieDerivativeRegularizer(ModuleWrapperBase, nn.Module, AbstractRegularizer):
     """
-    Computes the Lie bracket [X, Y] = X·∇Y − Y·∇X of two vector fields X, Y : ℝⁿ → ℝⁿ,
+    Computes the Lie bracket [X, y] = X·∇y − y·∇X of two vector fields X, y : ℝⁿ → ℝⁿ,
     in a fully differentiable way.
-    X, Y may be nn.Modules or plain callables.
+    X, y may be nn.Modules or plain callables.
     """
 
-    def __init__(self, f: VectorField, g: VectorField, *args, normalize: Union[bool,Literal["yang","new"]] = False,
-                 **kwargs) -> None:
+    def __init__(
+        self,
+        f: VectorField,
+        g: VectorField,
+        *args,
+        normalize: Union[bool, Literal["yang", "new"]] = False,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
 
-        self._f = f if isinstance(f, nn.Module) else self._wrap_callable(f)
+        self._wrapped = f if isinstance(f, nn.Module) else self._wrap_callable(f)
         self.g = g if isinstance(g, nn.Module) else self._wrap_callable(g)
         self.normalize = normalize
         if not normalize:
@@ -85,13 +93,14 @@ class LieDerivativeRegularizer(nn.Module, AbstractRegularizer):
         else:
             raise ValueError(f"Unknown normalization type: {normalize}.")
 
-    def eval_regularizer(self, x:T) -> T:
+    def eval_regularizer(self, x: T) -> T:
         return self._eval_regularizer(x)
 
     @property
     def f(self) -> nn.Module:
         """Expose the wrapped vector field as a read-only property"""
-        return self._f
+        return self._wrapped
+
     def forward(self, x: T) -> T:
         """
         Computes the Lie derivative
@@ -101,19 +110,19 @@ class LieDerivativeRegularizer(nn.Module, AbstractRegularizer):
         Returns:
 
         """
-        _,_,DFg,DGf = self._eval_vfields(x)
+        _, _, DFg, DGf = self._eval_vfields(x)
 
         return DFg - DGf
 
-    # def regularizer(self, x: T) -> T:
+    # def regularizer(self, y: T) -> T:
     #     """
-    #     Computes the regularization term for the Lie bracket, summing/averaging self.regularizer(x) over time & batch.
+    #     Computes the regularization term for the Lie bracket, summing/averaging self.regularizer(y) over time & batch.
     #     Args:
-    #         x:
+    #         y:
     #     Returns:
     #
     #     """
-    #     return self.regularizer(x).sum()
+    #     return self.regularizer(y).sum()
 
     def _regularizer_yang(self, x: T) -> T:
         DFg, ell2 = self._regularizer_common(x)
@@ -122,12 +131,12 @@ class LieDerivativeRegularizer(nn.Module, AbstractRegularizer):
         return ell2 / (DFg_norm + eps)
 
     def _eval_regularizer_basic(self, x: T) -> T:
-        return  self._regularizer_common(x)[-1]
+        return self._regularizer_common(x)[-1]
 
     def _regularizer_common(self, x):
         _, _, DFg, DGf = self._eval_vfields(x)
         eps = torch.finfo(DFg.dtype).eps
-        ell2 = torch.norm(DFg - DGf, p=2, dim=-1).square()
+        ell2 = torch.linalg.vector_norm(DFg - DGf, ord=2, dim=-1).square()
         return DFg, ell2
 
     def _eval_vfields_no_norm(self, x):
@@ -138,23 +147,33 @@ class LieDerivativeRegularizer(nn.Module, AbstractRegularizer):
 
         def Ftilde(x_):
             v = self.f(x_)
-            v/=(self.f(x_).norm(dim=-1, keepdim=True) + eps)
+            v /= torch.linalg.norm(v, ord=2, dim=-1, keepdim=True) + eps
             return v
 
         return self._eval_vfields_common(Ftilde, self.g, x)
 
-    def _eval_vfields_common(self, F:Callable[[T], T], G:Callable[[T], T], x:T) -> tuple[T,T,T,T]:
+    def _eval_vfields_common(
+        self, F: Callable[[T], T], G: Callable[[T], T], x: T
+    ) -> tuple[T, T, T, T]:
         f, DFg = self.directional_derivative(F, G, x)
         g, DGf = self.directional_derivative(G, F, x)
-        return f,g,DFg, DGf
+        return f, g, DFg, DGf
 
     @staticmethod
-    def directional_derivative(v1:VectorField, v2:VectorField, x:T) -> tuple[T,T]:
-        # f, DFg = torch.func.jvp(self.F, (x,), (self.G(x),), strict=False)
-        # g, DGf = torch.autograd.functional.jvp(self.G, (x,), (self.F(x),), strict=False,
+    def directional_derivative(v1: VectorField, v2: VectorField, x: T) -> tuple[T, T]:
+        # dynamics, DFg = torch.func.jvp(self.F, (y,), (self.G(y),), strict=False)
+        # g, DGf = torch.autograd.functional.jvp(self.G, (y,), (self.F(y),), strict=False,
         #                                                       create_graph=True)
-        return torch.autograd.functional.jvp(v1, (x,), (v2(x),), strict=False,  # pyright: ignore [reportReturnType]
-                                             create_graph=True)
+        # dv = torch.autograd.functional.jvp(
+        #     v1,
+        #     (x,),
+        #     (v2(x),),
+        #     strict=False,  # pyright: ignore [reportReturnType]
+        #     create_graph=True,
+        # )
+        dv = torch.func.jvp(v1, (x,), (v2(x),), strict=False, has_aux=False)
+
+        return dv
 
 
 def _jvp(f, p, v):
@@ -168,38 +187,44 @@ def _compute_jet(f, x: Tensor, order: int) -> Tensor:
     if order > 4:
         raise NotImplementedError("Jets higher than order 4 are not implemented.")
 
-    j2 = lambda p, v: _jvp(f, (p,), (v,)) # noqa
-    j3 = lambda p, v, w: _jvp(j2, (p, v), (w,)) # noqa
-    j4 = lambda p, v, w, z: _jvp(j3, (p, v, w), (z,)) # noqa
+    j2 = lambda p, v: _jvp(f, (p,), (v,))  # noqa
+    j3 = lambda p, v, w: _jvp(j2, (p, v), (w,))  # noqa
+    j4 = lambda p, v, w, z: _jvp(j3, (p, v, w), (z,))  # noqa
 
     f1 = f(x)  # df/dt
     jets = [f1]
 
     if order >= 2:
-        f2 = j2(x, f1) # d^2f/dt^2
+        f2 = j2(x, f1)  # d^2f/dt^2
         jets.append(f2)
     if order >= 3:
-        f3 = j2(x, f2) + j3(x, f1, f1) # d^3f/dt^3
+        f3 = j2(x, f2) + j3(x, f1, f1)  # d^3f/dt^3
         jets.append(f3)
     if order >= 4:
-        f4 = j2(x, f3) + 3 * j3(x, f1, f2) + j4(x, f1, f1, f1) # d^4f/dt^4
+        f4 = j2(x, f3) + 3 * j3(x, f1, f2) + j4(x, f1, f1, f1)  # d^4f/dt^4
         jets.append(f4)
 
     return torch.stack(jets, dim=-1)
 
 
 class TestRegularizers(unittest.TestCase):
-
     @property
     def regularizer_list(self):
         from functools import partial
         from test_dynamics import dynamics_factory
+
         g_ = dynamics_factory()
         _regularizer_list = []
         _regularizer_list.append(partial(CurvatureRegularizer, order=1))
-        _regularizer_list.append(partial(LieDerivativeRegularizer,g=g_,normalize=True))
-        _regularizer_list.append(partial(LieDerivativeRegularizer,g=g_,normalize="yang"))
-        _regularizer_list.append(partial(LieDerivativeRegularizer,g=g_,normalize="new"))
+        _regularizer_list.append(
+            partial(LieDerivativeRegularizer, g=g_, normalize=True)
+        )
+        _regularizer_list.append(
+            partial(LieDerivativeRegularizer, g=g_, normalize="yang")
+        )
+        _regularizer_list.append(
+            partial(LieDerivativeRegularizer, g=g_, normalize="new")
+        )
         return []
 
     @property
@@ -208,7 +233,9 @@ class TestRegularizers(unittest.TestCase):
 
     @staticmethod
     def f_torch(y: torch.Tensor) -> torch.Tensor:
-        return torch.stack([torch.sin(y[...,0] ** 2 + y[...,1]), y[...,1] ** 3],dim=-1)
+        return torch.stack(
+            [torch.sin(y[..., 0] ** 2 + y[..., 1]), y[..., 1] ** 3], dim=-1
+        )
 
     @staticmethod
     def load_jax_utils():
@@ -254,22 +281,29 @@ class TestRegularizers(unittest.TestCase):
             reg_instance = reg(self.f_torch)
             reg_instance.regularizer(x).backward()
             self.assertIsNotNone(x.grad, f"Gradient is None for {reg.__name__}.")
-            self.assertTrue(torch.any(x.grad != 0), f"Gradient is zero for {reg.__name__}.")
+            self.assertTrue(
+                torch.any(x.grad != 0), f"Gradient is zero for {reg.__name__}."
+            )
 
     def test_curvature_regularizer(self):
         f = self.f_torch
-        pts = torch.randn(100,2)
+        pts = torch.randn(100, 2)
         J2 = _compute_jet(f, pts, order=2)
-        kappa1 = torch.diff(J2[...,0] * J2[...,1].flip(dims=(-1,)), dim= -1).abs_().squeeze()
-        kappa1 /= J2[...,0].norm(dim=-1).pow(3)
+        kappa1 = (
+            torch.diff(J2[..., 0] * J2[..., 1].flip(dims=(-1,)), dim=-1)
+            .abs_()
+            .squeeze()
+        )
+        kappa1 /= (
+            torch.linalg.norm(J2[..., 0], ord=2, dim=-1).pow(3)
+            + torch.finfo(J2.dtype).eps
+        )
         eps = self.eps
 
         kappa = CurvatureRegularizer(f, order=1).eval_regularizer(pts)
 
         self.assertTrue(
-            torch.allclose(
-                kappa, kappa1, atol=eps, rtol=eps, equal_nan=True
-            ),
+            torch.allclose(kappa, kappa1, atol=eps, rtol=eps, equal_nan=True),
             "1st Curvature doesn't match analytical.",
         )
 
@@ -281,7 +315,10 @@ class TestRegularizers(unittest.TestCase):
 
         self.assertTrue(
             np.allclose(
-                self.f_torch(z0_torch).detach().numpy(), np.array(f_jax(z0_jax)), atol=eps, rtol=eps
+                self.f_torch(z0_torch).detach().numpy(),
+                np.array(f_jax(z0_jax)),
+                atol=eps,
+                rtol=eps,
             ),
             "First derivative mismatch between Torch and JAX.",
         )

@@ -1,4 +1,4 @@
-# --- graphical model --- #
+# --- graphical ode --- #
 n_latents: 2
 n_latents_read: 2
 

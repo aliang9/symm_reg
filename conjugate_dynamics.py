@@ -37,8 +37,8 @@ class ConjugateSystem(nn.Module):
 	def __init__(self, f:VectorField, diffeo_model: nn.Module, t: float = 1.0):
 		super().__init__()
 		self.F = f
-		self.model = DiffeoWrapper(diffeo_model)  # compile the ODE model
-		# self.model = torch.compile(lambda t,x: diffeo_model(x))  # compile the ODE model
+		self.model = DiffeoWrapper(diffeo_model)  # compile the ODE ode
+		# self.ode = torch.compile(lambda t,y: ode(y))  # compile the ODE ode
 		self.T = t
 
 	def flow_forward(self, x):
@@ -52,7 +52,7 @@ class ConjugateSystem(nn.Module):
 	def conjugate_vector_field(self, y:Tensor):
 		x = self.flow_inverse(y)
 		dx = self.F(x)
-		# x.requires_grad_(True)
+		# y.requires_grad_(True)
 		y_fwd = self.flow_forward(x)
 		return torch.autograd.grad(y_fwd, x, grad_outputs=dx, retain_graph=True,
 		create_graph=True)[0]
@@ -138,9 +138,9 @@ def visualize_conjugacy_with_invariant(conjugate_system, f, bounds=(-2, 2), n_po
 
 class LieDerivative(nn.Module):
 	"""
-	Computes the Lie bracket [X, Y] = X·∇Y − Y·∇X of two vector fields X, Y : ℝⁿ → ℝⁿ,
+	Computes the Lie bracket [X, y] = X·∇y − y·∇X of two vector fields X, y : ℝⁿ → ℝⁿ,
 	in a fully differentiable way.
-	X, Y may be nn.Modules or plain callables.
+	X, y may be nn.Modules or plain callables.
 	"""
 	def __init__(self,
 				 f: VectorField,
@@ -173,7 +173,7 @@ class LieDerivative(nn.Module):
 			retain_graph=True
 		)[0]
 
-		# directional derivative dX = ∇X(x) · Y_x
+		# directional derivative dX = ∇X(y) · Y_x
 		df = torch.autograd.grad(
 			outputs=f,
 			inputs=x,
@@ -194,7 +194,7 @@ class LieDerivative(nn.Module):
 			retain_graph=True
 		)[0]
 
-		# directional derivative dX = ∇X(x) · Y_x
+		# directional derivative dX = ∇X(y) · Y_x
 		df = torch.autograd.grad(
 			outputs=f,
 			inputs=x,
@@ -246,15 +246,15 @@ def demo():
 				f = dynamics_factory(A)
 			case "ellipse":
 				A = torch.randn(2, 2).requires_grad_(True)
-				A = A @ A.T  # Ensure A is positive definite
+				A = A @ A.T  # Ensure w is positive definite
 				f = dynamics_factory(A)
 			case "nonlinear":
 				A = torch.randn(2, 2).requires_grad_(True)
-				A = A @ A.T  # Ensure A is positive definite
+				A = A @ A.T  # Ensure w is positive definite
 				model = Phi(dim, repetitions=1, hidden=32)
 				f = ConjugateSystem(dynamics_factory(A), model, t=20.0)
 			case _:
-				raise ValueError(f"Unknown base {vfield_kind}")
+				raise ValueError(dynamics"Unknown base {vfield_kind}")
 
 		# Element of the basis (generator) of the Lie algebra
 		# We're using SO(2), the group of rotations in 2D
@@ -266,13 +266,13 @@ def demo():
 
 		lie = LieDerivative(f, v)
 		ell = lie.regularizer(x)
-		print(f"Normalized Lie derivative loss: {ell.item():.3e} for {vfield_kind}-like dynamics\n")
+		print(dynamics"Normalized Lie derivative loss: {ell.item():.3e} for {vfield_kind}-like dynamics\n")
 		grad_A, = torch.autograd.grad(ell, A, create_graph=False)
 		# print(grad_A)
 
 		x0 = x.detach().requires_grad_(True)
 		ell_1 = lie.regularizer(x0, normalize=False)
-		print(f"Unnormalized Lie derivative loss: {ell_1.item():.3e} for {vfield_kind}-like dynamics\n\n")
+		print(dynamics"Unnormalized Lie derivative loss: {ell_1.item():.3e} for {vfield_kind}-like dynamics\n\n")
 		(grad_A1,) = torch.autograd.grad(ell_1, A)
 		# print(grad_A1)
 
@@ -291,4 +291,4 @@ if __name__ == "__main__":
 	jets_torch = compute_jet_torch(_f_torch, eval_point, order=3)
 
 	for i, jet in enumerate(jets_torch, 1):
-		print(f"{i}th time-derivative of a vector field:", jet)
+		print(dynamics"{i}th time-derivative of a vector field:", jet)
