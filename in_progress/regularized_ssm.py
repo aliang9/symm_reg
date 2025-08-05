@@ -124,8 +124,8 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
         z_flat = z_mean.reshape(-1, z_mean.shape[-1])
 
         reg_losses = {}
-        total_reg_loss = 0.0
-
+        total_reg_loss = torch.tensor(0.0, device=z_flat.device)  
+        
         # Lie derivative regularization
         if self.lambda_lie > 0:
             lie_loss = self.lie_regularizer.regularizer(z_flat)
