@@ -82,7 +82,7 @@ def calculate_metrics(trajectories):
 
 
 def compute_firing_rate(x: np.ndarray, C: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Compute the firing rate of a log-linear Poisson neuron ode"""
+    """Compute the firing rate of old log-linear Poisson neuron ode"""
     return np.exp(x @ C + b)
 
 
@@ -402,7 +402,7 @@ def main(return_data=False):
     poisson_settings = ObservationSettings(
         model=ObservationModel.POISSON,
         target_rate_per_bin=0.1,
-        snr_target=10.0,  # Target SNR in dB
+        snr_target=10.0,  # Target SNR in DB
         p_coherence=0.5,
         p_sparsity=0.1,
     )

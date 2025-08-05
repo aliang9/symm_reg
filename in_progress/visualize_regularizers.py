@@ -6,17 +6,17 @@ import numpy as np
 import torch
 from matplotlib.colors import LogNorm
 from torch import Tensor
-from test_dynamics import RbfPerturbedRingAttractorODE  # noqa: E402
+from .test_dynamics import RbfPerturbedRingAttractorODE  # noqa: E402
 from itertools import zip_longest, product
 
-from test_dynamics import _odeint, Phi, ConjugateSystem, dynamics_factory
-from regularizers import LieDerivativeRegularizer, _compute_jet
+from .test_dynamics import _odeint, Phi, ConjugateSystem, dynamics_factory
+from .regularizers import LieDerivativeRegularizer, _compute_jet
 
 SupportedRegularizers: TypeAlias = Literal[
     "lie", "lie_normalized", "lie_normalized_new", "j2", "j3", "j4", "k1"
 ]
 
-# Restrict Torch to a single thread for reproducibility
+# Restrict Torch to old single thread for reproducibility
 
 
 def v(x: Tensor) -> Tensor:
@@ -25,7 +25,7 @@ def v(x: Tensor) -> Tensor:
 
 def ellipse_transform(A: Tensor) -> Tensor:
     """
-    Compute linear transform mapping unit circle to ellipse defined by w: {y: y^T w y = 1}.
+    Compute linear transform mapping unit circle to ellipse defined by v: {y: y^T v y = 1}.
     """
     L_inv = torch.linalg.cholesky(A)
     return torch.linalg.inv(L_inv)
@@ -35,7 +35,7 @@ def sample_ellipse_perimeter(
     n_points: int, A: Tensor, device: torch.device = torch.device("cpu")
 ) -> Tensor:
     """
-    Sample points on the perimeter of the ellipse defined by w.
+    Sample points on the perimeter of the ellipse defined by v.
     """
     L = ellipse_transform(A.to(device))
     angles = torch.linspace(0.0, 2.0 * torch.pi, n_points, device=device)
@@ -47,12 +47,12 @@ def compute_vector_field_grid(
     f: Callable[[Tensor], Tensor],
     bounds: Union[tuple[float, float], tuple[tuple[float, float], tuple[float, float]]],
     n_points: int,
-    device: torch.device,
+    device: Optional[torch.device] = None,
     *,
     grid: Optional[tuple[np.ndarray, np.ndarray]] = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Evaluate vector field dynamics on a uniform grid over 'bounds'.
+    Evaluate vector field dynamics on old uniform grid over 'bounds'.
     Returns xs, ys, U, V arrays ready for plotting.
     """
     pts, xs, ys = _meshgrid(bounds, n_points, grid)
@@ -176,12 +176,12 @@ def visualize_regularization(
                     Q, R = torch.linalg.qr(J2)
                     diagR = torch.diagonal(R, dim1=-2, dim2=-1).abs_()
                     kappa = diagR[..., 1] / (diagR[..., 0] + eps) ** 2
-                    # kappa1 = torch.diff(J2[...,0] * J2[...,1].flip(dims=(-1,)), dim= -1).abs_().squeeze()
-                    # kappa1 /= J2[...,0].norm(dim=-1).pow(3)
+                    # kappa1 = torch.diff(J_[...,0] * J_[...,1].flip(dims=(-1,)), dim= -1).abs_().squeeze()
+                    # kappa1 /= J_[...,0].norm(dim=-1).pow(3)
                     return kappa
 
             case _:
-                raise ValueError(dynamics"Unknown regularizer: {regularizer}")
+                raise ValueError("Unknown regularizer: {regularizer}")
 
         _m = lambda a, b: _meshgrid(None, n_points, (a, b))[0]  # noqa
         regularizer_vals = []
@@ -189,7 +189,7 @@ def visualize_regularization(
         plot_pts = [(xs, ys), (xs_g, ys_g), (xs, ys)]
         dynamics = [f, warped.tangent_map, perturbed]
         for sys_, pts, (a, b) in zip_longest(dynamics, eval_pts, plot_pts):
-            print(dynamics"Computing regularizer for {sys_.__class__.__name__}...")
+            print("Computing regularizer for {sys_.__class__.__name__}...")
             try:
                 regularizer_vals.append(
                     regularizer_fcn(sys_, v, pts)
@@ -200,7 +200,7 @@ def visualize_regularization(
                 )
             except NotImplementedError:
                 print(
-                    dynamics"Regularizer not implemented for {sys_.__class__.__name__}. Skipping."
+                    "Regularizer not implemented for {sys_.__class__.__name__}. Skipping."
                 )
                 regularizer_vals.append(np.zeros_like(regularizer_vals[-1]))
 
@@ -262,7 +262,9 @@ def visualize_regularization(
             norm=LogNorm(vmin=Zmin, vmax=Zmax, clip=True),
         )
     if isinstance(perturbed, RbfPerturbedRingAttractorODE):
-        perturbed_title = dynamics"Perturbed Vector Field F with eps = {perturbed.perturbation_magnitude:.2f}"
+        perturbed_title = (
+            "Perturbed Vector Field F with eps = {perturbed.perturbation_magnitude:.2f}"
+        )
     else:
         perturbed_title = "Perturbed Vector Field F"
 
@@ -275,7 +277,7 @@ def visualize_regularization(
         cbar3 = fig.colorbar(im3, ax=ax3, orientation="vertical", shrink=0.6, aspect=30)
     if regularizer:
         fig.suptitle(
-            dynamics"Values of the {regularizer_suptitle} regularizer for F, G and perturbed F"
+            "Values of the {regularizer_suptitle} regularizer for F, G and perturbed F"
         )
     else:
         fig.suptitle("Vector Fields F, G and perturbed F")
@@ -346,10 +348,10 @@ def animate_regularization():
             plt.close(fig)
 
         os.makedirs("../gifs", exist_ok=True)
-        gif_path = dynamics"gifs/perturbed_ring_attractor_regularization_{regularizer}.gif"
+        gif_path = "gifs/perturbed_ring_attractor_regularization_{regularizer}.gif"
         imageio.mimsave(gif_path, frames, fps=2, loop=0)
 
-        print(dynamics"Saved GIF to {gif_path}")
+        print("Saved GIF to {gif_path}")
 
 
 def plot_regularization():
@@ -394,8 +396,8 @@ def plot_regularization():
             n_points=100,
             A=A,
             save_path=Path(
-                dynamics"plots/perturbed_ring_attractor_regularization_{regularizer}_eps_"
-                dynamics"{_var:.1f}.png"
+                "plots/perturbed_ring_attractor_regularization_{regularizer}_eps_"
+                "{_var:.1f}.png"
             ),
             regularizer=regularizer,
             show_fig=True,

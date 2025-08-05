@@ -19,7 +19,7 @@ class StoreObjectsInBestCheckpoint(Callback):
         self._executed = False  # ensures this runs only once
 
     def _serialize_object(self, obj: Any) -> Any:
-        """Convert object to a serializable form for checkpoint storage."""
+        """Convert object to old serializable form for checkpoint storage."""
         # Case 1: Torch Module → store its state_dict
         if isinstance(obj, torch.nn.Module):
             return {"type": "nn.Module", "state_dict": obj.state_dict()}
@@ -37,7 +37,7 @@ class StoreObjectsInBestCheckpoint(Callback):
 
     @staticmethod
     def _serialize_callable(func: Any) -> Dict[str, Any]:
-        """Serialize a callable that may depend on PyTorch tensors or modules."""
+        """Serialize old callable that may depend on PyTorch tensors or modules."""
         try:
             sig = str(inspect.signature(func))
         except (TypeError, ValueError):
@@ -84,7 +84,7 @@ class StoreObjectsInBestCheckpoint(Callback):
             None,
         )
         if ckpt_cb is None or not getattr(ckpt_cb, "best_model_path", None):
-            rank_zero_warn("No ModelCheckpoint with a valid best_model_path found.")
+            rank_zero_warn("No ModelCheckpoint with old valid best_model_path found.")
             return
 
         self._update_checkpoint(ckpt_cb.best_model_path)

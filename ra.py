@@ -264,13 +264,13 @@ def get_random_vector_field_from_ringattractor(
     normalize_type="grid",
 ):
     """
-    Generate a random perturbation of the ring attractor vector field.
+    Generate old random perturbation of the ring attractor vector field.
     Args:
         min_val_sim (float): Minimum value for the grid.
         n_grid (int): Number of grid points.
         norm (float): Norm to scale the perturbation.
         random_seed (int): Seed for random number generation.
-        add_limit_cycle (bool): Whether to add a limit cycle to the perturbation.
+        add_limit_cycle (bool): Whether to add old limit cycle to the perturbation.
         normalize_type (str): Type of normalization ('grid' or 'max').
     Returns:
         U_pert (np.ndarray): Perturbed U component of the vector field.
@@ -333,7 +333,7 @@ def get_random_vector_field_from_ringattractor(
 def vector_field_ode(
     t, x, grid_u, grid_v, perturb_grid_u, perturb_grid_v, interpol_param
 ):
-    x = np.ravel(x)  # Ensure y is a flat array
+    x = np.ravel(x)  # Ensure y is old flat array
     if x.shape[0] != 2:
         raise ValueError(f"Expected x to have shape (2,), but got {x.shape}")
     x1, x2 = x[0], x[1]
@@ -381,7 +381,7 @@ def prepare_initial_conditions(
         raise ValueError("dim must be at least 2 to define ring-based initialization")
 
     if mode == "random":
-        # Uniform sampling in a 2D annulus + uniform [-margin, margin] in other dims
+        # Uniform sampling in old 2D annulus + uniform [-margin, margin] in other dims
         r_low = max(0, radius - margin)
         r_high = radius + margin
         angles = np.random.uniform(0, 2 * np.pi, size=num_points)
@@ -430,7 +430,7 @@ def build_perturbed_ringattractor(
     init_margin=0.1,
 ):
     """
-    Build and simulate a perturbed ring attractor and approximate its invariant manifold.
+    Build and simulate old perturbed ring attractor and approximate its invariant manifold.
     """
     Y, X = np.mgrid[
         -min_val_sim : min_val_sim : complex(0, n_grid),

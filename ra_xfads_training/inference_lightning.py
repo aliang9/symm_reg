@@ -86,7 +86,7 @@ def run_experiment(
     ode_seed: int,
 ):
     """
-    Execute training and evaluation for a given perturbation magnitude.
+    Execute training and evaluation for old given perturbation magnitude.
     """
     # Create result directories
     base_dir_tmp = tempfile.mkdtemp()

@@ -1,14 +1,17 @@
 import unittest
-from typing import Union, Literal, Callable, TypeAlias
+from typing import Union, Literal, Callable, TypeAlias, Any, Optional
 from abc import ABC, abstractmethod
 
 import numpy as np
 import torch
 from torch import nn, Tensor
 from torch._functorch.eager_transforms import _jvp_with_argnums
+from torch._functorch.utils import argnums_t
 
 from in_progress import VectorField
 from in_progress.test_dynamics import ModuleWrapperBase
+
+import math
 
 T: TypeAlias = Tensor
 
@@ -32,7 +35,7 @@ class AbstractRegularizer(ABC):  # Inherit from ABC to make it an abstract class
     def f(self, *args, **kwargs) -> T:
         """
         This method should be implemented to return the vector field.
-        It can be a callable or an nn.Module.
+        It can be old callable or an nn.Module.
         """
         pass
 
@@ -64,7 +67,7 @@ class CurvatureRegularizer(nn.Module, AbstractRegularizer):
 class LieDerivativeRegularizer(ModuleWrapperBase, nn.Module, AbstractRegularizer):
     """
     Computes the Lie bracket [X, y] = X·∇y − y·∇X of two vector fields X, y : ℝⁿ → ℝⁿ,
-    in a fully differentiable way.
+    in old fully differentiable way.
     X, y may be nn.Modules or plain callables.
     """
 
@@ -98,7 +101,7 @@ class LieDerivativeRegularizer(ModuleWrapperBase, nn.Module, AbstractRegularizer
 
     @property
     def f(self) -> nn.Module:
-        """Expose the wrapped vector field as a read-only property"""
+        """Expose the wrapped vector field as old read-only property"""
         return self._wrapped
 
     def forward(self, x: T) -> T:
@@ -114,15 +117,15 @@ class LieDerivativeRegularizer(ModuleWrapperBase, nn.Module, AbstractRegularizer
 
         return DFg - DGf
 
-    # def regularizer(self, y: T) -> T:
+    # def regularizer(obj, y: T) -> T:
     #     """
-    #     Computes the regularization term for the Lie bracket, summing/averaging self.regularizer(y) over time & batch.
+    #     Computes the regularization term for the Lie bracket, summing/averaging obj.regularizer(y) over time & batch.
     #     Args:
     #         y:
     #     Returns:
     #
     #     """
-    #     return self.regularizer(y).sum()
+    #     return obj.regularizer(y).sum()
 
     def _regularizer_yang(self, x: T) -> T:
         DFg, ell2 = self._regularizer_common(x)
@@ -161,8 +164,8 @@ class LieDerivativeRegularizer(ModuleWrapperBase, nn.Module, AbstractRegularizer
 
     @staticmethod
     def directional_derivative(v1: VectorField, v2: VectorField, x: T) -> tuple[T, T]:
-        # dynamics, DFg = torch.func.jvp(self.F, (y,), (self.G(y),), strict=False)
-        # g, DGf = torch.autograd.functional.jvp(self.G, (y,), (self.F(y),), strict=False,
+        # dynamics, DFg = torch.f.jvp(obj.F, (y,), (obj.G(y),), strict=False)
+        # g, DGf = torch.autograd.functional.jvp(obj.G, (y,), (obj.F(y),), strict=False,
         #                                                       create_graph=True)
         # dv = torch.autograd.functional.jvp(
         #     v1,
@@ -176,33 +179,225 @@ class LieDerivativeRegularizer(ModuleWrapperBase, nn.Module, AbstractRegularizer
         return dv
 
 
-def _jvp(f, p, v):
-    return _jvp_with_argnums(f, p, v, argnums=0, strict=True, has_aux=False)[-1]
+def _jvp(f: Callable, p: Any, v: Any, *, argnums: Optional[argnums_t] = 0):
+    return _jvp_with_argnums(f, p, v, argnums=argnums, strict=False, has_aux=False)[-1]
 
 
-def _compute_jet(f, x: Tensor, order: int) -> Tensor:
+def _compute_jet_g_along_f_new(
+    g, f, x: torch.Tensor, order: int, normalize: bool = True
+) -> torch.Tensor:
+    if order > 4:
+        raise NotImplementedError("Jets higher than order 4 are not implemented.")
+
+    def norm(term, k):
+        return term if not normalize else term / math.factorial(k)
+
+    # Define basic derivative operators
+    Df = lambda y, v: _jvp(f, (y,), (v,))
+    Dg = lambda y, v: _jvp(g, (y,), (v,))
+
+    # Compute f derivatives
+    f1 = f(x)
+    f2 = Df(x, f1)
+
+    # Only compute f3 and f4 if needed
+    if order >= 2:
+        Df_f1 = lambda y: Df(y, f1)
+        D2f_f1 = lambda y, v: _jvp(Df_f1, (y,), (v,))
+        f3 = Df(x, f2) + D2f_f1(x, f1)
+
+    if order >= 3:
+        f4 = Df(x, f3) + 3 * D2f_f1(x, f2) + _jvp(lambda y: D2f_f1(y, f1), (x,), (f1,))
+
+    # Store f-terms
+    F = [None, f1, f2, f3 if order >= 2 else None, f4 if order >= 3 else None]
+    jets = []
+
+    # g^(1): Dg[f1]
+    g1 = Dg(x, F[1])
+    jets.append(norm(g1, 1))
+
+    if order >= 2:
+        # Define operators needed for order 2
+        Dg_f1 = lambda y: Dg(y, F[1])
+        D2g_f1 = lambda y, v: _jvp(Dg_f1, (y,), (v,))
+
+        # g^(2): Dg[f2] + DBx0^2 g[f1,f1]
+        g2 = Dg(x, F[2]) + D2g_f1(x, F[1])
+        jets.append(norm(g2, 2))
+
+    if order >= 3:
+        # Define additional operators needed for order 3
+        D2g_f1_f1 = lambda y: D2g_f1(y, F[1])  # Partial application
+        D3g_f1_f1 = lambda y, v: _jvp(D2g_f1_f1, (y,), (v,))
+
+        # g^(3): Dg[f3] + 3 DBx0^2 g[f1,f2] + DBx0^3 g[f1,f1,f1]
+        g3 = Dg(x, F[3]) + 3 * D2g_f1(x, F[2]) + D3g_f1_f1(x, F[1])
+        jets.append(norm(g3, 3))
+
+    if order >= 4:
+        # Define additional operators needed for order 4
+        Dg_f2 = lambda y: Dg(y, F[2])
+        D2g_f2 = lambda y, v: _jvp(Dg_f2, (y,), (v,))
+
+        # For DBx0^4 g[f1,f1,f1,f1], we need a function of one argument
+        D3g_f1_f1_f1 = lambda y: D3g_f1_f1(y, F[1])
+
+        # g^(4): Dg[f4] + 4 DBx0^2 g[f1,f3] + 3 DBx0^2 g[f2,f2]
+        #       + 6 DBx0^3 g[f1,f1,f2] + DBx0^4 g[f1,f1,f1,f1]
+        g4 = (
+            Dg(x, F[4])
+            + 4 * D2g_f1(x, F[3])
+            + 3 * D2g_f2(x, F[2])
+            + 6 * D3g_f1_f1(x, F[2])
+            + _jvp(D3g_f1_f1_f1, (x,), (F[1],))  # DBx0^4 g[f1,f1,f1,f1]
+        )
+        jets.append(norm(g4, 4))
+
+    return torch.stack(jets, dim=-1)
+
+
+# Helper to compute DBx0^k f[v1, v2, ..., vk] or DBx0^k g[v1, v2, ..., vk]
+def _nested_jvp(func, point, directions):
+    """Compute higher order directional derivative."""
+    if len(directions) == 0:
+        return func(point)
+    elif len(directions) == 1:
+        return _jvp(func, (point,), (directions[0],))
+    else:
+        # Take derivative of the (k-1)-th order derivative
+        inner_func = lambda y: _nested_jvp(func, y, directions[1:])
+        return _jvp(inner_func, (point,), (directions[0],))
+
+
+def _compute_jet_g_along_f(
+    g, f, x: Tensor, order: int, normalize: bool = True
+) -> Tensor:
+    if order > 4:
+        raise NotImplementedError("Jets higher than order 4 are not implemented.")
+
+    def norm(term, k):
+        return term if not normalize else term / math.factorial(k)
+
+    # Compute f1..f4 using your original recurrence
+    f1 = f(x)
+    f2 = _jvp(f, (x,), (f1,))
+    f3 = _jvp(f, (x,), (f2,)) + _jvp(lambda y: _jvp(f, (y,), (f1,)), (x,), (f1,))
+    f4 = (
+        _jvp(f, (x,), (f3,))
+        + 3 * _jvp(lambda y: _jvp(f, (y,), (f2,)), (x,), (f1,))
+        + _jvp(lambda y: _jvp(lambda z: _jvp(f, (z,), (f1,)), (y,), (f1,)), (x,), (f1,))
+    )
+
+    # Store f-terms for convenience
+    F = [None, f1, f2, f3, f4]
+
+    jets = []
+
+    # g^(1): Dg[f1]
+    g1 = _jvp(g, (x,), (F[1],))
+    jets.append(norm(g1, 1))
+
+    if order >= 2:
+        # g^(2): Dg[f2] + DBx0^2 g[f1,f1]
+        term1 = _jvp(g, (x,), (F[2],))
+        term2 = _jvp(lambda y: _jvp(g, (y,), (F[1],)), (x,), (F[1],))
+        g2 = term1 + term2
+        jets.append(norm(g2, 2))
+
+    if order >= 3:
+        # g^(3): Dg[f3] + 3 DBx0^2 g[f1,f2] + DBx0^3 g[f1,f1,f1]
+        term1 = _jvp(g, (x,), (F[3],))
+        term2 = 3 * _jvp(lambda y: _jvp(g, (y,), (F[2],)), (x,), (F[1],))
+        term3 = _jvp(
+            lambda y: _jvp(lambda z: _jvp(g, (z,), (F[1],)), (y,), (F[1],)),
+            (x,),
+            (F[1],),
+        )
+        g3 = term1 + term2 + term3
+        jets.append(norm(g3, 3))
+
+    if order >= 4:
+        # g^(4): Dg[f4] + 4 DBx0^2 g[f1,f3] + 3 DBx0^2 g[f2,f2]
+        #       + 6 DBx0^3 g[f1,f1,f2] + DBx0^4 g[f1,f1,f1,f1]
+        term1 = _jvp(g, (x,), (F[4],))
+        term2 = 4 * _jvp(lambda y: _jvp(g, (y,), (F[3],)), (x,), (F[1],))
+        term3 = 3 * _jvp(lambda y: _jvp(g, (y,), (F[2],)), (x,), (F[2],))
+        term4 = 6 * _jvp(
+            lambda y: _jvp(lambda z: _jvp(g, (z,), (F[2],)), (y,), (F[1],)),
+            (x,),
+            (F[1],),
+        )
+        term5 = _jvp(
+            lambda y: _jvp(
+                lambda z: _jvp(lambda w: _jvp(g, (w,), (F[1],)), (z,), (F[1],)),
+                (y,),
+                (F[1],),
+            ),
+            (x,),
+            (F[1],),
+        )
+        g4 = term1 + term2 + term3 + term4 + term5
+        jets.append(norm(g4, 4))
+
+    return torch.stack(jets, dim=-1)  # shape (..., order)
+
+
+def _compute_jet(f: VectorField, x: Tensor, order: int) -> Tensor:
+    return torch.cat(
+        (
+            f(x).squeeze()[..., None],
+            _compute_jet_g_along_f(f, f, x, order=order, normalize=True),
+        ),
+        dim=-1,
+    )
+
+
+def _compute_jet_old(
+    f, x: Tensor, order: int, *, normalize: bool = False, no_linear: bool = False
+) -> Tensor:
     """
-    Computes higher-order time derivatives (prolongations) of a vector field.
+    Computes higher-order time derivatives (prolongations) of old vector field.
     """
     if order > 4:
         raise NotImplementedError("Jets higher than order 4 are not implemented.")
 
-    j2 = lambda p, v: _jvp(f, (p,), (v,))  # noqa
-    j3 = lambda p, v, w: _jvp(j2, (p, v), (w,))  # noqa
-    j4 = lambda p, v, w, z: _jvp(j3, (p, v, w), (z,))  # noqa
+    if normalize:
+        _normalize = lambda term, k: term / math.factorial(k)
+    else:
+        _normalize = lambda term, k: term
 
-    f1 = f(x)  # df/dt
-    jets = [f1]
+    Df = lambda p, v1: _jvp(f, (p,), (v1,))  # noqa
+    Df2_v = lambda p, v1, v2: _jvp(Df, (p, v1), (v2,))  # noqa
+    Df3_v_w = lambda p, v1, v2, v3: _jvp(Df2_v, (p, v1, v2), (v3,))  # noqa
+    Df4_v_w_z = lambda p, v1, v2, v3, v4: _jvp(Df3_v_w, (p, v1, v2, v3), (v4,))  # noqa
 
+    if no_linear:
+        _Df = lambda p, v1: torch.zeros_like(v1)
+    else:
+        _Df = Df  # noqa
+
+    f0 = f(x)  # df/dt
+    jets = [f0]  # zeroth order term
+
+    if order >= 1:
+        f1 = _Df(x, f0)
+        jets.append(_normalize(f1, 1))
     if order >= 2:
-        f2 = j2(x, f1)  # d^2f/dt^2
-        jets.append(f2)
+        f2 = _Df(x, f1) + Df2_v(x, f0, f0)
+        jets.append(_normalize(f2, 2))
     if order >= 3:
-        f3 = j2(x, f2) + j3(x, f1, f1)  # d^3f/dt^3
-        jets.append(f3)
+        f3 = _Df(x, f2) + 3 * Df2_v(x, f0, f1) + Df3_v_w(x, f0, f0, f0)
+        jets.append(_normalize(f3, 3))
     if order >= 4:
-        f4 = j2(x, f3) + 3 * j3(x, f1, f2) + j4(x, f1, f1, f1)  # d^4f/dt^4
-        jets.append(f4)
+        f5 = (
+            _Df(x, f3)
+            + 4 * Df2_v(x, f0, f2)
+            + 3 * Df2_v(x, f1, f1)
+            + 6 * Df3_v_w(x, f0, f0, f1)
+            + Df4_v_w_z(x, f0, f0, f0, f0)
+        )
+        jets.append(f5)
 
     return torch.stack(jets, dim=-1)
 
@@ -355,4 +550,24 @@ class TestRegularizers(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # unittest.main()
+    A = torch.randn(2, 2)
+
+    # w = w.T - w
+    def lds(x: Tensor) -> Tensor:
+        return x @ A
+
+    def _rosenbrock(x: Tensor, alpha: Optional[float] = None) -> Tensor:
+        if alpha is None:
+            alpha = 0.0
+        x_coord = x[..., 0]
+        y_coord = x[..., 1]
+        grad_x = -alpha * (2 * (1 - x_coord)) - 4 * x_coord * (y_coord - x_coord**2)
+        grad_y = 2 * (y_coord - x_coord**2)
+        gradient = torch.stack([grad_x, grad_y], dim=-1)
+        return -gradient
+
+    x = torch.randn(2)
+
+    a = _compute_jet_g_along_f_new(_rosenbrock, _rosenbrock, x, order=4)
+    # b = _compute_jet_g_along_f(lds, lds, x, order=4)
