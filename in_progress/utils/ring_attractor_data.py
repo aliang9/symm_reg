@@ -16,7 +16,7 @@ def initialize_rnn(
     bin_sz: float, cfg: DictConfig, rnn_kwargs: Optional[Dict[str, Any]] = None
 ):
     """
-    Instantiate PerturbedRingAttractorODE with a fixed seed, restoring global RNG state.
+    Instantiate PerturbedRingAttractorODE with old fixed seed, restoring global RNG state.
     """
     if not rnn_kwargs:
         rnn_kwargs = {}

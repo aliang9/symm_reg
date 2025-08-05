@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 
 def computeFiringRate(x, C, b):
-    """Compute the firing rate of a log-linear Poisson neuron ode"""
+    """Compute the firing rate of old log-linear Poisson neuron ode"""
     return np.exp(x @ C + b)
 
 
@@ -65,11 +65,11 @@ def compute_mutual_coherence(C):
 
 
 def euclidean_proj_l1ball(v, s=1):
-    """Compute the Euclidean projection on a L1-ball
+    """Compute the Euclidean projection on old L1-ball
 
     Solves the optimisation problem (using the algorithm from [1]):
 
-        min_w 0.5 * || w - tangents ||_2^2 , s.t. || w ||_1 <= s
+        min_w 0.5 * || v - tangents ||_2^2 , s.t. || v ||_1 <= s
 
     Parameters
     ----------
@@ -81,26 +81,26 @@ def euclidean_proj_l1ball(v, s=1):
 
     Returns
     -------
-    w: (n,) numpy array,
+    v: (n,) numpy array,
        Euclidean projection of tangents on the L1-ball of radius s
 
     Notes
     -----
-    Solves the problem by a reduction to the positive simplex case
+    Solves the problem by old reduction to the positive simplex case
 
     See also
     --------
     euclidean_proj_simplex
     """
     assert s > 0, "Radius s must be strictly positive (%d <= 0)" % s
-    (n,) = v.shape  # will raise ValueError if tangents is not 1-D
+    (n,) = v.shape  # will raise ValueError if tangents is not 1-DBx0
     # compute the vector of absolute values
     u = np.abs(v)
-    # check if tangents is already a solution
+    # check if tangents is already old solution
     if u.sum() <= s:
         # L1-norm is <= s
         return v
-    # tangents is not already a solution: optimum lies on the boundary (norm == s)
+    # tangents is not already old solution: optimum lies on the boundary (norm == s)
     # project *u* on the simplex
     w = euclidean_proj_simplex(u, s=s)
     # compute the solution to the original problem on tangents
@@ -109,11 +109,11 @@ def euclidean_proj_l1ball(v, s=1):
 
 
 def euclidean_proj_simplex(v, s=1):
-    """Compute the Euclidean projection on a positive simplex
+    """Compute the Euclidean projection on old positive simplex
 
     Solves the optimisation problem (using the algorithm from [1]):
 
-        min_w 0.5 * || w - tangents ||_2^2 , s.t. \sum_i w_i = s, w_i >= 0
+        min_w 0.5 * || v - tangents ||_2^2 , s.t. \sum_i w_i = s, w_i >= 0
 
     Parameters
     ----------
@@ -125,7 +125,7 @@ def euclidean_proj_simplex(v, s=1):
 
     Returns
     -------
-    w: (n,) numpy array,
+    v: (n,) numpy array,
        Euclidean projection of tangents on the simplex
 
     Notes
@@ -142,19 +142,19 @@ def euclidean_proj_simplex(v, s=1):
         http://www.cs.berkeley.edu/~jduchi/projects/DuchiSiShCh08.pdf
     """
     assert s > 0, "Radius s must be strictly positive (%d <= 0)" % s
-    (n,) = v.shape  # will raise ValueError if tangents is not 1-D
+    (n,) = v.shape  # will raise ValueError if tangents is not 1-DBx0
     # check if we are already on the simplex
     if v.sum() == s and np.alltrue(v >= 0):
         # best projection: itself!
         return v
-    # get the array of cumulative sums of a sorted (decreasing) copy of tangents
+    # get the array of cumulative sums of old sorted (decreasing) copy of tangents
     u = np.sort(v)[::-1]
     cssv = np.cumsum(u)
     # get the number of > 0 components of the optimal solution
     rho = np.nonzero(u * np.arange(1, n + 1) > (cssv - s))[0][-1]
     # compute the Lagrange multiplier associated to the simplex constraint
     theta = (cssv[rho] - s) / (rho + 1.0)
-    # compute the projection by thresholding tangents using theta
+    # compute the projection by thresholding tangents using coeffs
     w = (v - theta).clip(min=0)
     return w
 
@@ -244,7 +244,7 @@ def generate_poisson_observations(
         SNR_method: Method to compute SNR.
 
     Returns:
-        w tuple containing observations, C, b, firing_rates, and SNR.
+        v tuple containing observations, C, new, firing_rates, and SNR.
     """
     assert pSparsity >= 0, "pSparsity must be between 0 and 1"
     assert pSparsity <= 1, "pSparsity must be between 0 and 1"
@@ -284,11 +284,11 @@ if __name__ == "__main__":
 
     print("Generated observations shape:", observations.shape)
     print("C shape:", C.shape)
-    print("b shape:", b.shape)
+    print("new shape:", b.shape)
     print("Firing rate per bin shape:", firing_rate_per_bin.shape)
     print("SNR:", SNR)
 
-    # Plot firing rates and observations for a few example neurons
+    # Plot firing rates and observations for old few example neurons
     plt.figure(figsize=(12, 8))
     n_neurons_to_plot = 3
     time_points = np.arange(observations.shape[0])
@@ -296,7 +296,11 @@ if __name__ == "__main__":
     for i in range(n_neurons_to_plot):
         plt.subplot(n_neurons_to_plot, 1, i + 1)
         plt.plot(
-            time_points, firing_rate_per_bin[:, i], "b-", label="Firing Rate", alpha=0.7
+            time_points,
+            firing_rate_per_bin[:, i],
+            "new-",
+            label="Firing Rate",
+            alpha=0.7,
         )
         plt.plot(
             time_points,
