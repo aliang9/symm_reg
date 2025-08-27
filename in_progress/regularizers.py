@@ -8,8 +8,8 @@ from torch import nn, Tensor
 from torch._functorch.eager_transforms import _jvp_with_argnums
 from torch._functorch.utils import argnums_t
 
-from in_progress import VectorField
-from in_progress.test_dynamics import ModuleWrapperBase
+from __init__ import VectorField
+from test_dynamics import ModuleWrapperBase
 
 import math
 
@@ -402,6 +402,111 @@ def _compute_jet_old(
     return torch.stack(jets, dim=-1)
 
 
+def _sample_rotation_matrix(n_dim: int, device: torch.device = None, dtype: torch.dtype = None) -> Tensor:
+    """
+    Sample a random rotation matrix in SO(n) using the QR decomposition method.
+    
+    Args:
+        n_dim: Dimension of the rotation matrix (2 for 2D, 3 for 3D, etc.)
+        device: Device to create tensor on
+        dtype: Data type for the tensor
+        
+    Returns:
+        Random rotation matrix of shape (n_dim, n_dim)
+    """
+    if device is None:
+        device = torch.device('cpu')
+    if dtype is None:
+        dtype = torch.float32
+        
+    # Sample from standard Gaussian and perform QR decomposition
+    A = torch.randn(n_dim, n_dim, device=device, dtype=dtype)
+    Q, R = torch.linalg.qr(A)
+    
+    # Ensure proper rotation (det = 1) by adjusting signs
+    d = torch.diag(R)
+    ph = d / d.abs()
+    Q = Q * ph.unsqueeze(0)
+    
+    # Final check: if det(Q) < 0, flip the last column
+    if torch.det(Q) < 0:
+        Q[:, -1] *= -1
+        
+    return Q
+
+
+class RotationInvarianceRegularizer(nn.Module, AbstractRegularizer):
+    """
+    Regularizer that enforces rotation invariance by penalizing f(g·x) - g·f(x)
+    where g is a randomly sampled rotation matrix at each gradient step.
+    
+    This regularizer measures how much the learned vector field f violates 
+    rotation symmetry by computing the difference between:
+    - f evaluated at rotated points: f(g·x)  
+    - rotated f evaluated at original points: g·f(x)
+    
+    For a perfectly rotation-invariant field, these should be equal.
+    """
+    
+    def __init__(self, f: VectorField, n_rotations: int = 1, *args, **kwargs):
+        """
+        Args:
+            f: The vector field to regularize
+            n_rotations: Number of random rotations to sample per evaluation
+        """
+        super().__init__(*args, **kwargs)
+        self._f = f if isinstance(f, nn.Module) else self._wrap_callable(f)
+        self.n_rotations = n_rotations
+        
+    @property
+    def f(self) -> nn.Module:
+        return self._f
+        
+    def eval_regularizer(self, x: T) -> T:
+        """
+        Compute rotation invariance violation: ||f(g·x) - g·f(x)||²
+        
+        Args:
+            x: Input points of shape (..., n_dim)
+            
+        Returns:
+            Rotation invariance loss for each point (...,)
+        """
+        batch_shape = x.shape[:-1]
+        n_dim = x.shape[-1]
+        
+        # Flatten batch dimensions for easier processing
+        x_flat = x.reshape(-1, n_dim)  # (batch_size, n_dim)
+        n_points = x_flat.shape[0]
+        
+        total_loss = torch.zeros(n_points, device=x.device, dtype=x.dtype)
+        
+        for _ in range(self.n_rotations):
+            # Sample random rotation matrix
+            g = _sample_rotation_matrix(n_dim, device=x.device, dtype=x.dtype)
+            
+            # Rotate the points: g·x
+            x_rotated = x_flat @ g.T  # (batch_size, n_dim)
+            
+            # Evaluate f at original and rotated points
+            f_x = self.f(x_flat)  # (batch_size, n_dim)
+            f_gx = self.f(x_rotated)  # (batch_size, n_dim)
+            
+            # Rotate f(x): g·f(x)
+            gf_x = f_x @ g.T  # (batch_size, n_dim)
+            
+            # Compute violation: f(g·x) - g·f(x)
+            violation = f_gx - gf_x  # (batch_size, n_dim)
+            
+            # L2 norm squared
+            loss = torch.linalg.vector_norm(violation, ord=2, dim=-1).square()
+            total_loss += loss
+            
+        # Average over rotations and reshape back to original batch shape
+        avg_loss = total_loss / self.n_rotations
+        return avg_loss.reshape(batch_shape)
+
+
 class TestRegularizers(unittest.TestCase):
     @property
     def regularizer_list(self):
@@ -420,7 +525,8 @@ class TestRegularizers(unittest.TestCase):
         _regularizer_list.append(
             partial(LieDerivativeRegularizer, g=g_, normalize="new")
         )
-        return []
+        _regularizer_list.append(partial(RotationInvarianceRegularizer, n_rotations=2))
+        return _regularizer_list
 
     @property
     def eps(self):
@@ -571,3 +677,38 @@ if __name__ == "__main__":
 
     a = _compute_jet_g_along_f_new(_rosenbrock, _rosenbrock, x, order=4)
     # b = _compute_jet_g_along_f(lds, lds, x, order=4)
+    
+    # Test the new RotationInvarianceRegularizer
+    print("Testing RotationInvarianceRegularizer...")
+    
+    # Test with a rotation-invariant field (should give low loss)
+    def radial_field(x: Tensor) -> Tensor:
+        """Radial field: f(x) = r * x/||x|| where r = ||x||"""
+        norm = torch.linalg.norm(x, dim=-1, keepdim=True)
+        return x * norm  # This should be rotation invariant
+    
+    # Test with a rotation-breaking field 
+    def asymmetric_field(x: Tensor) -> Tensor:
+        """Field that breaks rotation symmetry"""
+        return torch.stack([x[..., 0]**2, x[..., 1]], dim=-1)
+    
+    test_points = torch.randn(10, 2) * 2.0  # 10 random 2D points
+    
+    # Test rotation-invariant field
+    rot_reg_invariant = RotationInvarianceRegularizer(radial_field, n_rotations=5)
+    invariant_loss = rot_reg_invariant.regularizer(test_points)
+    print(f"Rotation-invariant field loss: {invariant_loss.item():.6f}")
+    
+    # Test rotation-breaking field  
+    rot_reg_breaking = RotationInvarianceRegularizer(asymmetric_field, n_rotations=5)
+    breaking_loss = rot_reg_breaking.regularizer(test_points)
+    print(f"Rotation-breaking field loss: {breaking_loss.item():.6f}")
+    
+    print(f"Ratio (breaking/invariant): {breaking_loss.item()/invariant_loss.item():.2f}")
+    
+    # Test gradient computation
+    test_points.requires_grad_(True)
+    loss = rot_reg_breaking.regularizer(test_points)
+    loss.backward()
+    print(f"Gradient computed successfully: {test_points.grad is not None}")
+    print(f"Gradient norm: {torch.linalg.norm(test_points.grad).item():.6f}")

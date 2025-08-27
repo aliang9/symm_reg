@@ -3,17 +3,18 @@ from typing import Dict, Any, Callable, Union
 
 from xfads.smoothers.lightning_trainers import LightningNonlinearSSM
 from xfads.smoothers.nonlinear_smoother import LowRankNonlinearStateSpaceModel
-from regularizers import LieDerivativeRegularizer, CurvatureRegularizer
+from regularizers import LieDerivativeRegularizer, CurvatureRegularizer, RotationInvarianceRegularizer
 
 
 class RegularizedSSM(LowRankNonlinearStateSpaceModel):
     """
     A State Space Model with symmetry regularization.
 
-    Combines three loss components:
+    Combines up to four loss components:
     1. ELBO loss (KL divergence - log likelihood)
     2. Lie derivative regularization for symmetry enforcement
     3. Optional curvature regularization for smooth trajectories
+    4. Optional rotation invariance regularization for rotational symmetry
     """
 
     def __init__(
@@ -24,11 +25,13 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
         backward_encoder,
         local_encoder,
         nl_filter,
-        target_vector_field: Callable[[torch.Tensor], torch.Tensor],
+        target_vector_field: Callable[[torch.Tensor], torch.Tensor] = None,
         lambda_lie: float = 1.0,
         lambda_curvature: float = 0.0,
+        lambda_rotation: float = 0.0,
         lie_normalize: Union[bool, str] = False,
         curvature_order: int = 1,
+        n_rotations: int = 1,
         device: str = "cpu",
     ):
         """
@@ -39,11 +42,13 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
             backward_encoder: Backward encoder
             local_encoder: Local encoder
             nl_filter: Nonlinear filter
-            target_vector_field: Target symmetry vector field g(x)
+            target_vector_field: Target symmetry vector field g(x) (for Lie derivative)
             lambda_lie: Weight for Lie derivative regularization
             lambda_curvature: Weight for curvature regularization (0 = disabled)
+            lambda_rotation: Weight for rotation invariance regularization (0 = disabled)
             lie_normalize: Normalization for Lie derivative ("yang", "new", or False)
             curvature_order: Order for curvature regularization
+            n_rotations: Number of rotations to sample for rotation invariance regularization
             device: Device for computation
         """
         super().__init__(
@@ -59,12 +64,16 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
         # Store regularization parameters
         self.lambda_lie = lambda_lie
         self.lambda_curvature = lambda_curvature
+        self.lambda_rotation = lambda_rotation
         self.target_vector_field = target_vector_field
 
         # Initialize regularizers
-        self.lie_regularizer = LieDerivativeRegularizer(
-            self.dynamics_mod.mean_fn, target_vector_field, normalize=lie_normalize
-        )
+        if lambda_lie > 0 and target_vector_field is not None:
+            self.lie_regularizer = LieDerivativeRegularizer(
+                self.dynamics_mod.mean_fn, target_vector_field, normalize=lie_normalize
+            )
+        else:
+            self.lie_regularizer = None
 
         if lambda_curvature > 0:
             self.curvature_regularizer = CurvatureRegularizer(
@@ -72,6 +81,13 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
             )
         else:
             self.curvature_regularizer = None
+
+        if lambda_rotation > 0:
+            self.rotation_regularizer = RotationInvarianceRegularizer(
+                self.dynamics_mod.mean_fn, n_rotations=n_rotations
+            )
+        else:
+            self.rotation_regularizer = None
 
     def forward(
         self,
@@ -92,6 +108,12 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
             z_s: Latent samples [n_samples, n_trials, n_time, n_latents]
             stats: Dictionary with loss components and other statistics
         """
+
+        # ell = self.likelihood_pdf.get_ell(y, z_s).mean(dim=0)
+        # loss = stats['kl'] - ell
+        # loss = loss.sum(dim=-1).mean()
+        # return loss, z_s, stats
+
         elbo_loss, z_s, stats = super().forward(
             y, n_samples, p_mask_y_in, p_mask_apb, p_mask_a, p_mask_b, get_P_s
         )
@@ -127,7 +149,7 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
         total_reg_loss = torch.tensor(0.0, device=z_flat.device)  
         
         # Lie derivative regularization
-        if self.lambda_lie > 0:
+        if self.lambda_lie > 0 and self.lie_regularizer is not None:
             lie_loss = self.lie_regularizer.regularizer(z_flat)
             reg_losses["lie_loss"] = lie_loss
             total_reg_loss += self.lambda_lie * lie_loss
@@ -141,6 +163,14 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
             total_reg_loss += self.lambda_curvature * curvature_loss
         else:
             reg_losses["curvature_loss"] = torch.tensor(0.0, device=z_flat.device)
+
+        # Rotation invariance regularization
+        if self.lambda_rotation > 0 and self.rotation_regularizer is not None:
+            rotation_loss = self.rotation_regularizer.regularizer(z_flat)
+            reg_losses["rotation_loss"] = rotation_loss
+            total_reg_loss += self.lambda_rotation * rotation_loss
+        else:
+            reg_losses["rotation_loss"] = torch.tensor(0.0, device=z_flat.device)
 
         reg_losses["total_reg_loss"] = total_reg_loss
 
@@ -162,6 +192,7 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
             "elbo_loss": stats["elbo_loss"].item(),
             "lie_loss": stats["lie_loss"].item(),
             "curvature_loss": stats["curvature_loss"].item(),
+            "rotation_loss": stats["rotation_loss"].item(),
             "total_reg_loss": stats["total_reg_loss"].item(),
             "total_loss": stats["total_loss"].item(),
         }
@@ -180,11 +211,16 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
         """
         results = {}
 
-        if self.lambda_lie > 0:
+        if self.lambda_lie > 0 and self.lie_regularizer is not None:
             results["lie_values"] = self.lie_regularizer.eval_regularizer(points)
 
         if self.lambda_curvature > 0 and self.curvature_regularizer is not None:
             results["curvature_values"] = self.curvature_regularizer.eval_regularizer(
+                points
+            )
+
+        if self.lambda_rotation > 0 and self.rotation_regularizer is not None:
+            results["rotation_values"] = self.rotation_regularizer.eval_regularizer(
                 points
             )
 
@@ -213,6 +249,10 @@ class RegularizedLightningSSM(LightningNonlinearSSM):
         self.log("train_lie", stats["lie_loss"], prog_bar=False)
         if stats["curvature_loss"] > 0:
             self.log("train_curvature", stats["curvature_loss"], prog_bar=False)
+        if stats["rotation_loss"] > 0:
+            self.log("train_rotation", stats["rotation_loss"], prog_bar=False)
+        self.log("train_kl", stats['kl'].sum(dim=-1).mean(), prog_bar=False)
+        self.log("train_recon", stats['kl'].sum(dim=-1).mean() - stats['elbo_loss'], prog_bar=False)
 
         return loss
 
@@ -231,6 +271,15 @@ class RegularizedLightningSSM(LightningNonlinearSSM):
                 prog_bar=False,
                 sync_dist=True,
             )
+        if stats["rotation_loss"] > 0:
+            self.log(
+                "valid_rotation",
+                stats["rotation_loss"],
+                prog_bar=False,
+                sync_dist=True,
+            )
+        self.log("valid_kl", stats['kl'].sum(dim=-1).mean(), prog_bar=False)
+        self.log("valid_recon", stats['kl'].sum(dim=-1).mean() - stats['elbo_loss'], prog_bar=False)
 
         return loss
 
