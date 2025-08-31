@@ -1,16 +1,15 @@
-from functools import partial, wraps
+from functools import wraps
 from typing import Any, Callable, Dict, Optional, Tuple, TypeAlias, Union
 import warnings
 
 import gpytorch
+import numpy as np
 import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 from torchdyn.numerics import odeint as _td_odeint
-
-from in_progress import VectorField
-from in_progress.utils.autograd_function import close_over_autogradfunc
+from functools import partial
 
 
 class ModuleWrapperBase(nn.Module):
@@ -36,6 +35,9 @@ class ModuleWrapperBase(nn.Module):
 _odeint = lambda f_, x_, t_, **kwargs: _td_odeint(f_, x_, t_, solver="tsit5", **kwargs)[
     -1
 ]
+
+from in_progress import VectorField
+from in_progress.utils.autograd import close_over_autogradfunc
 
 
 nn_activation: TypeAlias = torch.nn.modules.activation
@@ -128,15 +130,11 @@ class PerturbedRingAttractorODE(nn.Module):
         else:
             (x_min, x_max), (y_min, y_max) = domain_extent
 
-        # Torch equivalents of linspace and meshgrid
-        x_grid = torch.linspace(x_min, x_max, steps=Nx, dtype=torch.float32)
-        y_grid = torch.linspace(y_min, y_max, steps=Ny, dtype=torch.float32)
-        X, Y = torch.meshgrid(x_grid, y_grid, indexing="xy")  # (Ny, Nx) each
-
-        # Flatten to (Nx*Ny, 2)
-        pts_t = torch.stack(
-            [X.reshape(-1), Y.reshape(-1)], dim=-1
-        )  # float32 by default
+        x_grid = np.linspace(x_min, x_max, Nx)
+        y_grid = np.linspace(y_min, y_max, Ny)
+        X, Y = np.meshgrid(x_grid, y_grid)
+        pts = np.column_stack([X.ravel(), Y.ravel()])  # (Nx*Ny, 2)
+        pts_t = torch.tensor(pts.astype(np.float32))
 
         # Sample GP prior for U and V components
         gp_model = _GPPerturbation(train_x=pts_t, lengthscale=lengthscale, noise=noise)
@@ -146,17 +144,13 @@ class PerturbedRingAttractorODE(nn.Module):
 
         U_grid, V_grid = UV_grid.renorm(
             p=2, dim=0, maxnorm=perturbation_magnitude
-        ).chunk(2, dim=0)  # each (1, Nx*Ny)
-
-        # Reshape to (1,1,Ny,Nx)
-        U_grid = U_grid.view(1, 1, Ny, Nx)
-        V_grid = V_grid.view(1, 1, Ny, Nx)
+        ).vsplit(2)
 
         # Register buffers
-        self.register_buffer("x_grid", x_grid)
-        self.register_buffer("y_grid", y_grid)
-        self.register_buffer("perturb_u", U_grid)
-        self.register_buffer("perturb_v", V_grid)
+        self.register_buffer("x_grid", torch.tensor(x_grid.astype(np.float32)))
+        self.register_buffer("y_grid", torch.tensor(y_grid.astype(np.float32)))
+        self.register_buffer("perturb_u", U_grid.unsqueeze(0).unsqueeze(0))
+        self.register_buffer("perturb_v", V_grid.unsqueeze(0).unsqueeze(0))
         self.x_min, self.x_max = x_min, x_max
         self.y_min, self.y_max = y_min, y_max
 
@@ -172,7 +166,7 @@ class PerturbedRingAttractorODE(nn.Module):
         return sampled.squeeze()
 
     def forward(
-        self, x: torch.Tensor, t: Optional[torch.Tensor] = None
+        self, x: torch.Tensor, t: Optional[torch.Tensor] = torch.tensor(0)
     ) -> torch.Tensor:
         # Radial-attractor base field
         r = torch.linalg.norm(x, dim=-1, keepdim=True)
@@ -466,9 +460,8 @@ def dynamics_factory(w=None) -> Callable[[Tensor], Tensor]:
 
 
 if __name__ == "__main__":
-    import numpy as np
     import pytorch_lightning as pl
-    from regularizers import LieDerivativeRegularizerBase
+    from regularizers import LieDerivativeRegularizer
     from utils.ring_attractor_data import data_gen
 
     DEBUG = True
@@ -487,15 +480,9 @@ if __name__ == "__main__":
 
     _regularizer_list = []
     # _regularizer_list.append(partial(CurvatureRegularizer, order=1))
-    _regularizer_list.append(
-        partial(LieDerivativeRegularizerBase, g=v, normalize=False)
-    )
-    _regularizer_list.append(
-        partial(LieDerivativeRegularizerBase, g=v, normalize="yang")
-    )
-    _regularizer_list.append(
-        partial(LieDerivativeRegularizerBase, g=v, normalize="new")
-    )
+    _regularizer_list.append(partial(LieDerivativeRegularizer, g=v, normalize=False))
+    _regularizer_list.append(partial(LieDerivativeRegularizer, g=v, normalize="yang"))
+    _regularizer_list.append(partial(LieDerivativeRegularizer, g=v, normalize="new"))
     r_at_perturbation_magnitudes = []
     t_conjs = np.geomspace(20, 0.1, num=10)
 
@@ -540,8 +527,8 @@ if __name__ == "__main__":
                 "Gradients should match after conjugation."
             )
 
-            rv1 = regularizer1.compute_pointwise_regularization(pts1)
-            rv2 = regularizer2.compute_pointwise_regularization(pts2)
+            rv1 = regularizer1.eval_regularizer(pts1)
+            rv2 = regularizer2.eval_regularizer(pts2)
             jvp1 = torch.func.jvp(
                 mean_fn1, (pts1,), (mean_fn1(pts1),), strict=False, has_aux=False
             )[-1]
@@ -579,7 +566,7 @@ if __name__ == "__main__":
                 "Regularizer values not match after conjugation."
             )
 
-            vals = regularizer1.compute_regularization(pts1)
+            vals = regularizer1.regularizer(pts1)
             regularizer_vals.append(vals)
         r_at_perturbation_magnitudes.append(torch.stack(regularizer_vals, dim=-1))
     r_at_perturbation_magnitudes = (
