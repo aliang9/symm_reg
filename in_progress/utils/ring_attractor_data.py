@@ -10,7 +10,7 @@ import torch
 from omegaconf import DictConfig
 from math import sqrt, ceil  # noqa
 
-
+#TODO rn defaults to WarpedRingAttractorRNN, try training XFADS on a more perturbed ring?
 @rng_state_noop
 def initialize_rnn(
     bin_sz: float, cfg: DictConfig, rnn_kwargs: Optional[Dict[str, Any]] = None
