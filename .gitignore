@@ -1,3 +1,6 @@
+.DS_Store
+paper_figures/
+ignore/
 figures/
 __pycache__/
 *.pyc
@@ -9,6 +12,8 @@ __pycache__/
 gifs
 plots
 ra_xfads_training/results
+*.pt
+*.ckpt
 *.png
 *.gif
 pyrightconfig.json

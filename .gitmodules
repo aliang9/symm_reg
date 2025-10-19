@@ -4,6 +4,3 @@
 [submodule "symmetry-ode-discovery"]
 	path = symmetry-ode-discovery
 	url = https://github.com/Rose-STL-Lab/symmetry-ode-discovery.git
-[submodule "neurreps"]
-	path = neurreps
-	url = /neurreps
