@@ -364,6 +364,8 @@ def train_single(
     run_dir.mkdir(parents=True, exist_ok=True)
     log_dir = run_dir / "logs"
     ckpt_dir = run_dir / "ckpts"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     csv_logger = CSVLogger(str(log_dir), name="", version="")
     ckpt_callback = ModelCheckpoint(
@@ -404,9 +406,12 @@ def train_single(
         final_valid_loss = final_valid_loss.item()
 
     # Evaluate final loss components
+    # Ensure model and data are on the same device after Lightning training
+    regularized_ssm.to(device)
     regularized_ssm.eval()
     with torch.no_grad():
-        total_loss, _, stats = regularized_ssm(y_valid, flat_cfg.n_samples)
+        y_valid_device = y_valid.to(device)
+        total_loss, _, stats = regularized_ssm(y_valid_device, flat_cfg.n_samples)
 
     result = {
         "lambda_lie": lambda_lie,
@@ -725,6 +730,9 @@ def main(cfg: DictConfig):
     torch.set_default_dtype(torch.float32)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        # Disable cuDNN for GRU - the fused CUDA GRU cell doesn't support
+        # forward-mode autodiff (torch.func.jvp) used by the Lie regularizer
+        torch.backends.cudnn.enabled = False
 
     # Build flat config for existing in_progress/ functions
     flat_cfg = build_flat_cfg(cfg)
