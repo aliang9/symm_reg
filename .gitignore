@@ -1,3 +1,15 @@
+CLAUDE.md
+paper.md
+poster.py
+regularizer.md
+scripting.md
+symmetry-ode-discovery/
+xfads/
+requirements.txt
+streamline_plot.pdf
+in_progress/figure_making.ipynb
+in_progress/regularization_analysis_v2 copy.ipynb
+
 *.zip
 *.csv
 *.pkl
