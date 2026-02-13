@@ -1,0 +1,41 @@
+# @package _global_
+# Experiment 4: 3D Sphere attractor with SO(3) symmetry
+# Uses 3D latent space, sphere dynamics, and SO(3) Lie derivative regularizer.
+
+experiment_type: sweep
+
+model:
+  n_latents: 3
+  n_latents_read: 3
+  rank_local: 3
+  rank_backward: 3
+  n_hidden_dynamics: 128
+
+dynamics:
+  type: sphere
+  perturbation_magnitude: 0.1
+  lengthscale: 0.3
+  bin_sz: 0.1
+
+regularization:
+  lie_normalize: false
+
+sweep:
+  lambda_lie: [0.0, 1e-4, 1e-3, 1e-2]
+  symmetries:
+    - name: so3_full
+      type: so3
+      params: {weights: [1.0, 1.0, 1.0]}
+
+training:
+  n_epochs: 50
+  patience: 10
+
+data:
+  n_neurons: 100
+  Q_diag: 5e-3
+  R_diag: 1e-1
+
+output:
+  base_dir: results/sphere_so3
+  comprehensive_analysis: true

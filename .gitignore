@@ -40,3 +40,5 @@ ra_xfads_training/logs/r_y_2_r_b_2/noncausal
 nhim.ipynb
 nhim_bak.py
 nhimg2.py
+outputs/
+results/

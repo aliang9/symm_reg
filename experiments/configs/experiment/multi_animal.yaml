@@ -1,0 +1,35 @@
+# @package _global_
+# Experiment 3: Multi-animal experiment
+# Different observation matrices (C) per animal, same underlying dynamics.
+# Two strategies: shared_dynamics (pool with single model) vs independent.
+
+experiment_type: multi_animal
+
+training:
+  n_epochs: 50
+  patience: 10
+
+dynamics:
+  type: ring
+  perturbation_magnitude: 0.1
+
+# Multi-animal-specific settings
+multi_animal:
+  n_animals: 2
+  animal_seeds: [42, 137]   # RNG seeds for generating different C matrices
+  strategy: shared_dynamics  # shared_dynamics | independent
+  n_trials_per_animal: 1500  # Trials generated per animal
+
+sweep:
+  lambda_lie: [0.0, 1e-4, 1e-3, 1e-2]
+  symmetries:
+    - name: lie_rotation
+      type: rotation
+      params: {speed: 0.5}
+
+regularization:
+  lie_normalize: false
+
+output:
+  base_dir: results/multi_animal
+  comprehensive_analysis: true

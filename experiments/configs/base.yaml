@@ -1,0 +1,101 @@
+# Base configuration for symmetry-regularized experiments
+# All experiment configs inherit from and override this base.
+
+defaults:
+  - _self_
+
+# --- Model architecture (mirrors in_progress/config.yaml) ---
+model:
+  n_latents: 2
+  n_latents_read: 2
+  rank_local: 2
+  rank_backward: 2
+  n_hidden_dynamics: 64
+  n_samples: 5
+  n_hidden_local: 128
+  n_hidden_backward: 64
+
+# --- Inference network ---
+inference:
+  use_cd: false
+  p_mask_a: 0.8
+  p_mask_b: 0.0
+  p_mask_apb: 0.0
+  p_mask_y_in: 0.0
+  p_local_dropout: 0.4
+  p_backward_dropout: 0.0
+
+# --- Training ---
+training:
+  lr: 1e-3
+  n_epochs: 50
+  batch_sz: 128
+  patience: 10
+  grad_clip: 1.0
+  lr_gamma_decay: 0.99
+  seed: 1234
+  device: auto  # auto | cpu | cuda
+
+# --- Data generation ---
+data:
+  n_trials: 3000
+  n_neurons: 100
+  n_time_bins: 75
+  Q_diag: 5e-3
+  Q_0_diag: 1.0
+  R_diag: 1e-1
+  train_split: 0.667
+
+# --- Dynamics ---
+dynamics:
+  type: ring          # ring | sphere
+  perturbation_magnitude: 0.1
+  lengthscale: 0.2
+  bin_sz: 0.1
+
+# --- Regularization ---
+regularization:
+  lambda_lie: 0.0
+  lambda_curvature: 0.0
+  lambda_rotation: 0.0
+  lie_normalize: false   # false | "yang" | "new"
+  curvature_order: 1
+  n_rotations: 1
+
+# --- Symmetry ---
+symmetry:
+  type: rotation       # rotation | translation | scaling | spiral | so3
+  params:
+    speed: 0.5         # for rotation
+    # direction: [1.0, 0.0]  # for translation
+    # rate: 1.0              # for scaling
+
+# --- Output ---
+output:
+  base_dir: results
+  save_vector_fields: true
+  comprehensive_analysis: false
+
+# --- Sweep settings (used by sweep and other experiment types) ---
+sweep:
+  lambda_lie: [0.0]
+  symmetries:
+    - name: lie_rotation
+      type: rotation
+      params: {speed: 0.5}
+
+# --- Consensus settings (used by consensus experiment type) ---
+consensus:
+  n_seeds: 2
+  perturbation_seeds: [42, 137]
+  share_C: true
+
+# --- Multi-animal settings (used by multi_animal experiment type) ---
+multi_animal:
+  n_animals: 2
+  animal_seeds: [42, 137]
+  strategy: shared_dynamics
+  n_trials_per_animal: 1500
+
+# --- Experiment dispatch ---
+experiment_type: sweep   # sweep | consensus | multi_animal

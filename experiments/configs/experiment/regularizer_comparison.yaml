@@ -1,0 +1,38 @@
+# @package _global_
+# Experiment 1: Compare regularizers and symmetry types
+# Sweeps lambda_lie across values for multiple symmetry vector fields.
+
+experiment_type: sweep
+
+training:
+  n_epochs: 50
+  patience: 10
+
+dynamics:
+  type: ring
+  perturbation_magnitude: 0.1
+
+# Sweep over these lambda values (list triggers sweep in train.py)
+sweep:
+  lambda_lie: [0.0, 1e-4, 1e-3, 1e-2, 1e-1]
+  # Each entry defines a symmetry to test
+  symmetries:
+    - name: lie_rotation
+      type: rotation
+      params: {speed: 0.5}
+    - name: lie_translation_x
+      type: translation
+      params: {direction: [1.0, 0.0]}
+    - name: lie_translation_y
+      type: translation
+      params: {direction: [0.0, 1.0]}
+    - name: lie_translation_diag
+      type: translation
+      params: {direction: [0.707, 0.707]}
+    - name: rotation_invariance
+      type: rotation_invariance
+      params: {n_rotations: 3}
+
+output:
+  base_dir: results/regularizer_comparison
+  comprehensive_analysis: true
