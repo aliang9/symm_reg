@@ -1,0 +1,66 @@
+# @package _global_
+# Experiment: Time-varying perturbation experiment
+#
+# This experiment tests whether symmetry regularization helps the model
+# generalize across continuously drifting dynamics. Unlike the consensus
+# experiment (which pools discrete perturbation seeds), this uses a single
+# continuous time-varying perturbation that evolves smoothly over time.
+#
+# Key idea:
+#   - Dynamics: dx/dt = x*(1-||x||) + g(x,t) where g(x,t) is RFF perturbation
+#   - Each trajectory experiences different perturbation snapshots
+#   - Regularization should help recover the underlying ring attractor
+#
+# Usage:
+#   python experiments/train.py +experiment=time_varying
+#   python experiments/train.py +experiment=time_varying training.device=cuda
+
+experiment_type: time_varying
+
+training:
+  n_epochs: 100
+  patience: 15
+  lr: 5e-4  # Slightly lower for stability with changing perturbations
+
+data:
+  n_trials: 1000
+  R_diag: 0.3
+
+dynamics:
+  type: ring
+  perturbation_magnitude: 0.4  # Stronger perturbations to make effect visible
+  bin_sz: 0.1
+
+# Time-varying specific settings
+time_varying:
+  enabled: true
+  n_features: 100           # Number of RFF features (higher = better GP approx)
+  length_scale_x: 0.5       # Spatial correlation length (relative to ring radius)
+  length_scale_t: 15.0       # Temporal correlation length (in bin units)
+  perturbation_seed: null   # Random seed for reproducibility (null = random)
+
+sweep:
+  lambda_lie: [0.0, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 1e-1]
+  symmetries:
+    - name: lie_rotation
+      type: rotation
+      params: {speed: 0.5}
+
+regularization:
+  lie_normalize: false
+
+output:
+  base_dir: results/time_varying
+  comprehensive_analysis: true
+
+# Forecasting evaluation settings
+forecasting:
+  enabled: true
+  n_forecast_steps: 50        # Steps to roll out beyond training
+  perturbation_types:
+    - name: radial
+      delta_r: 0.3            # Radial perturbation magnitude (push off ring)
+    - name: strong_gp_kick
+      kick_magnitude: 0.5     # GP-based kick magnitude
+  n_eval_points: 100          # Points to evaluate forecasting on
+  target_radius: 1.0          # Ring radius for evaluation

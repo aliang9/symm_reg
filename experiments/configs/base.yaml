@@ -97,5 +97,25 @@ multi_animal:
   strategy: shared_dynamics
   n_trials_per_animal: 1500
 
+# --- Time-varying settings (used by time_varying experiment type) ---
+time_varying:
+  enabled: false
+  n_features: 100           # Number of RFF features
+  length_scale_x: 0.5       # Spatial correlation length
+  length_scale_t: 5.0       # Temporal correlation length
+  perturbation_seed: null   # Random seed (null = random)
+
+# --- Forecasting evaluation settings ---
+forecasting:
+  enabled: false
+  n_forecast_steps: 50
+  perturbation_types:
+    - name: radial
+      delta_r: 0.3
+    - name: strong_gp_kick
+      kick_magnitude: 0.5
+  n_eval_points: 100
+  target_radius: 1.0
+
 # --- Experiment dispatch ---
-experiment_type: sweep   # sweep | consensus | multi_animal
+experiment_type: sweep   # sweep | consensus | multi_animal | time_varying
