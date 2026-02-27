@@ -46,6 +46,8 @@ from regularized_ssm import RegularizedSSM, RegularizedLightningSSM
 from symmetry_examples import rotation_symmetry, translation_symmetry, scaling_symmetry
 from test_dynamics import PerturbedRingAttractorRNN
 from sphere_dynamics import PerturbedSphereAttractorRNN, create_so3_generators, create_combined_so3_vector_field
+from time_varying_utils import TimeVaryingPerturbedRingAttractorRNN
+from utils.time_varying_data import sample_gauss_z_time_varying
 
 log = logging.getLogger(__name__)
 
@@ -700,6 +702,123 @@ def run_multi_animal(cfg: DictConfig, flat_cfg: DictConfig):
     return df
 
 
+def generate_time_varying_ring_data(flat_cfg, cfg):
+    """Generate ring attractor data with time-varying RFF perturbations."""
+    device = flat_cfg.device
+    n_trials = cfg.data.n_trials
+    n_neurons = cfg.data.n_neurons
+    n_time_bins = cfg.data.n_time_bins
+    tv_cfg = cfg.time_varying
+
+    # Isolate RNG state from perturbation sampling
+    cpu_state = torch.get_rng_state()
+    cuda_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    np_state = np.random.get_state()
+
+    mean_fn = TimeVaryingPerturbedRingAttractorRNN(
+        bin_sz=cfg.dynamics.bin_sz,
+        perturbation_magnitude=cfg.dynamics.perturbation_magnitude,
+        n_features=tv_cfg.n_features,
+        length_scale_x=tv_cfg.length_scale_x,
+        length_scale_t=tv_cfg.length_scale_t,
+        seed=tv_cfg.perturbation_seed,
+    ).to(device)
+
+    torch.set_rng_state(cpu_state)
+    if cuda_state is not None:
+        torch.cuda.set_rng_state_all(cuda_state)
+    np.random.set_state(np_state)
+
+    C = utils.FanInLinear(flat_cfg.n_latents, n_neurons, device=device).requires_grad_(False)
+    Q_diag = cfg.data.Q_diag * torch.ones(flat_cfg.n_latents, device=device)
+    Q_0_diag = cfg.data.Q_0_diag * torch.ones(flat_cfg.n_latents, device=device)
+    R_diag = cfg.data.R_diag * torch.ones(n_neurons, device=device)
+    m_0 = torch.zeros(flat_cfg.n_latents, device=device)
+
+    # Use time-varying data generation that passes time to dynamics
+    z = sample_gauss_z_time_varying(
+        mean_fn, Q_diag, m_0, Q_0_diag,
+        n_trials, n_time_bins, cfg.dynamics.bin_sz
+    )
+    y = C(z) + torch.sqrt(R_diag) * torch.randn(
+        (n_trials, n_time_bins, n_neurons), device=device
+    )
+    y = y.detach()
+
+    return y, z, mean_fn, C, Q_diag, Q_0_diag, R_diag, m_0
+
+
+def run_time_varying(cfg: DictConfig, flat_cfg: DictConfig):
+    """
+    Time-varying perturbation experiment.
+
+    Unlike the consensus experiment (which pools discrete perturbation seeds),
+    this uses a single continuous time-varying perturbation that evolves
+    smoothly over time via Random Fourier Features (RFF).
+
+    Key idea: Each trajectory experiences the perturbation at different times,
+    so the model must learn dynamics that generalize across the temporal
+    evolution of the perturbation.
+
+    Hypothesis: Regularized models (lambda > 0) should recover the underlying
+    ring attractor better than unregularized models, which may overfit to
+    the average perturbation.
+    """
+    device = flat_cfg.device
+    sweep_cfg = cfg.sweep
+    lambda_values = list(sweep_cfg.lambda_lie)
+    symmetries = OmegaConf.to_container(sweep_cfg.symmetries, resolve=True)
+    output_dir = Path(cfg.output.base_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    log.info(f"Time-varying experiment: {len(lambda_values)} lambda values")
+    log.info(f"  RFF features: {cfg.time_varying.n_features}")
+    log.info(f"  Length scale (x): {cfg.time_varying.length_scale_x}")
+    log.info(f"  Length scale (t): {cfg.time_varying.length_scale_t}")
+
+    # Seed and generate time-varying data
+    pl.seed_everything(cfg.training.seed, workers=True)
+    y, z, mean_fn, C, Q_diag, Q_0_diag, R_diag, m_0 = generate_time_varying_ring_data(
+        flat_cfg, cfg
+    )
+
+    all_results = []
+
+    for sym_cfg in symmetries:
+        sym_name = sym_cfg["name"]
+        target_field = build_symmetry_field(sym_cfg)
+
+        for lam in lambda_values:
+            run_name = f"tv_{sym_name}_lambda_{lam:.2e}"
+            run_dir = output_dir / run_name
+            log.info(f"--- {run_name} ---")
+
+            # Reset seed for reproducibility across runs
+            pl.seed_everything(cfg.training.seed, workers=True)
+
+            result = train_single(
+                flat_cfg, cfg, y, C, Q_diag, Q_0_diag, R_diag, m_0,
+                target_vector_field=target_field,
+                lambda_lie=lam,
+                lambda_curvature=cfg.regularization.lambda_curvature,
+                lambda_rotation=0.0,
+                run_dir=run_dir,
+            )
+            result["symmetry"] = sym_name
+            result["time_varying"] = True
+            result["n_features"] = cfg.time_varying.n_features
+            result["length_scale_x"] = cfg.time_varying.length_scale_x
+            result["length_scale_t"] = cfg.time_varying.length_scale_t
+            all_results.append(result)
+
+    # Save summary CSV
+    df = pd.DataFrame(all_results)
+    csv_path = output_dir / "time_varying_results.csv"
+    df.to_csv(csv_path, index=False)
+    log.info(f"Time-varying results saved to {csv_path}")
+    return df
+
+
 # ============================================================================
 # Hydra entry point
 # ============================================================================
@@ -751,6 +870,8 @@ def main(cfg: DictConfig):
         run_consensus(cfg, flat_cfg)
     elif cfg.experiment_type == "multi_animal":
         run_multi_animal(cfg, flat_cfg)
+    elif cfg.experiment_type == "time_varying":
+        run_time_varying(cfg, flat_cfg)
     else:
         raise ValueError(f"Unknown experiment_type: {cfg.experiment_type}")
 
