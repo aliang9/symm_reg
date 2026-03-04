@@ -467,6 +467,14 @@ def run_sweep(cfg: DictConfig, flat_cfg: DictConfig):
         sym_name = sym_cfg["name"]
         target_field = build_symmetry_field(sym_cfg)
 
+        # For rotation_invariance, build a rotation field for Lie loss monitoring
+        if target_field is None and sym_cfg["type"] == "rotation_invariance":
+            lie_monitor_field = rotation_symmetry(
+                speed=sym_cfg.get("params", {}).get("speed", 0.5)
+            )
+        else:
+            lie_monitor_field = target_field
+
         for lam in lambda_values:
             run_name = f"{sym_name}_lambda_{lam:.2e}"
             run_dir = output_dir / run_name
@@ -481,7 +489,7 @@ def run_sweep(cfg: DictConfig, flat_cfg: DictConfig):
 
             result = train_single(
                 flat_cfg, cfg, y, C, Q_diag, Q_0_diag, R_diag, m_0,
-                target_vector_field=target_field,
+                target_vector_field=lie_monitor_field,
                 lambda_lie=lambda_lie,
                 lambda_curvature=cfg.regularization.lambda_curvature,
                 lambda_rotation=lambda_rotation,
@@ -788,6 +796,16 @@ def run_time_varying(cfg: DictConfig, flat_cfg: DictConfig):
         sym_name = sym_cfg["name"]
         target_field = build_symmetry_field(sym_cfg)
 
+        # For rotation_invariance, we still need a rotation target field
+        # so the LieDerivativeRegularizer is created for monitoring (logged
+        # but not used in the optimization loss when lambda_lie=0).
+        if target_field is None and sym_cfg["type"] == "rotation_invariance":
+            lie_monitor_field = rotation_symmetry(
+                speed=sym_cfg.get("params", {}).get("speed", 0.5)
+            )
+        else:
+            lie_monitor_field = target_field
+
         for lam in lambda_values:
             run_name = f"tv_{sym_name}_lambda_{lam:.2e}"
             run_dir = output_dir / run_name
@@ -796,12 +814,16 @@ def run_time_varying(cfg: DictConfig, flat_cfg: DictConfig):
             # Reset seed for reproducibility across runs
             pl.seed_everything(cfg.training.seed, workers=True)
 
+            # Determine which lambda to set based on symmetry type
+            lambda_lie = lam if sym_cfg["type"] != "rotation_invariance" else 0.0
+            lambda_rotation = lam if sym_cfg["type"] == "rotation_invariance" else 0.0
+
             result = train_single(
                 flat_cfg, cfg, y, C, Q_diag, Q_0_diag, R_diag, m_0,
-                target_vector_field=target_field,
-                lambda_lie=lam,
+                target_vector_field=lie_monitor_field,
+                lambda_lie=lambda_lie,
                 lambda_curvature=cfg.regularization.lambda_curvature,
-                lambda_rotation=0.0,
+                lambda_rotation=lambda_rotation,
                 run_dir=run_dir,
             )
             result["symmetry"] = sym_name

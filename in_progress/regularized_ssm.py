@@ -68,7 +68,9 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
         self.target_vector_field = target_vector_field
 
         # Initialize regularizers
-        if lambda_lie > 0 and target_vector_field is not None:
+        # Always create the Lie regularizer when a target field is provided,
+        # even if lambda_lie=0, so we can log the metric for baseline comparison.
+        if target_vector_field is not None:
             self.lie_regularizer = LieDerivativeRegularizer(
                 self.dynamics_mod.mean_fn, target_vector_field, normalize=lie_normalize
             )
@@ -149,10 +151,13 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
         total_reg_loss = torch.tensor(0.0, device=z_flat.device)  
         
         # Lie derivative regularization
-        if self.lambda_lie > 0 and self.lie_regularizer is not None:
+        # Always compute for logging (enables baseline comparison), but only
+        # add to the optimization loss when lambda_lie > 0.
+        if self.lie_regularizer is not None:
             lie_loss = self.lie_regularizer.regularizer(z_flat)
             reg_losses["lie_loss"] = lie_loss
-            total_reg_loss += self.lambda_lie * lie_loss
+            if self.lambda_lie > 0:
+                total_reg_loss += self.lambda_lie * lie_loss
         else:
             reg_losses["lie_loss"] = torch.tensor(0.0, device=z_flat.device)
 
@@ -211,7 +216,7 @@ class RegularizedSSM(LowRankNonlinearStateSpaceModel):
         """
         results = {}
 
-        if self.lambda_lie > 0 and self.lie_regularizer is not None:
+        if self.lie_regularizer is not None:
             results["lie_values"] = self.lie_regularizer.eval_regularizer(points)
 
         if self.lambda_curvature > 0 and self.curvature_regularizer is not None:
