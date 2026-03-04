@@ -23,7 +23,8 @@ training:
   lr: 5e-4  # Slightly lower for stability with changing perturbations
 
 data:
-  n_trials: 1000
+  n_trials: 200
+  n_time_bins: 50
   R_diag: 0.3
 
 dynamics:
@@ -50,7 +51,7 @@ regularization:
   lie_normalize: false
 
 output:
-  base_dir: results/time_varying_noisy
+  base_dir: results/time_varying_noisy_data
   comprehensive_analysis: true
 
 # Forecasting evaluation settings

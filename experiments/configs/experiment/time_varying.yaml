@@ -24,7 +24,7 @@ training:
 
 dynamics:
   type: ring
-  perturbation_magnitude: 0.2  # Stronger perturbations to make effect visible
+  perturbation_magnitude: 0.2
   bin_sz: 0.1
 
 # Time-varying specific settings
@@ -36,7 +36,7 @@ time_varying:
   perturbation_seed: null   # Random seed for reproducibility (null = random)
 
 sweep:
-  lambda_lie: [0.0, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 1e-1]
+  lambda_lie: [0.0, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 1e-1, 1e-0]
   symmetries:
     - name: lie_rotation
       type: rotation
